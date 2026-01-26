@@ -16,6 +16,8 @@ jobs:
   ruff_check:
     name: Run Ruff Linter and Formatter
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
     - name: Check out repository
