@@ -44,7 +44,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["tests*"]
+exclude = ["test*"]
 
 # --- Ruff Linting Configuration ---
 [tool.ruff]
