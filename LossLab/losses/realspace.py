@@ -1,13 +1,15 @@
 """Real-space loss functions for comparing model maps with target maps."""
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import gemmi
 import numpy as np
 import torch
 from geomloss import SamplesLoss
 from loguru import logger
-from SFC_Torch import PDBParser
+
+if TYPE_CHECKING:
+    from SFC_Torch import PDBParser
 
 from LossLab.losses.base import BaseLoss
 from LossLab.utils.decorators import cached_property, gpu_memory_tracked, timed

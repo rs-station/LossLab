@@ -23,7 +23,7 @@ from LossLab import RealSpaceLoss, RefinementConfig, RefinementEngine
 
 
 def main():
-    """Main refinement script with clean, minimal API."""
+    """Main refinement script."""
 
     # ========== 1. INITIALIZATION (One section) ==========
 
@@ -61,7 +61,7 @@ def main():
 
     # Configure refinement
     config = RefinementConfig(
-        num_iterations=3,
+        num_iterations=30,
         num_runs=1,
         learning_rate_additive=1e-3,
         learning_rate_multiplicative=1e-3,
