@@ -1,0 +1,389 @@
+"""Refinement engine for coordinate optimization."""
+
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import torch
+from loguru import logger
+from tqdm import tqdm
+
+from LossLab.losses.base import BaseLoss
+from LossLab.refinement.checkpoint import CheckpointManager
+from LossLab.refinement.config import RefinementConfig
+from LossLab.refinement.metrics import MetricsTracker
+from LossLab.utils.decorators import gpu_memory_tracked, timed
+from LossLab.utils.geometry import kabsch_align
+
+
+class EarlyStopper:
+    """Early stopping based on loss plateau."""
+
+    def __init__(self, patience: int = 150, min_delta: float = 0.0001):
+        """Initialize early stopper.
+
+        Args:
+            patience: Number of iterations to wait for improvement
+            min_delta: Minimum change to count as improvement
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_loss = float("inf")
+
+    def should_stop(self, loss: float) -> bool:
+        """Check if training should stop.
+
+        Args:
+            loss: Current loss value
+
+        Returns:
+            Whether to stop training
+        """
+        if loss < self.best_loss - self.min_delta:
+            self.best_loss = loss
+            self.counter = 0
+            return False
+        else:
+            self.counter += 1
+            return self.counter >= self.patience
+
+
+class RefinementEngine:
+    """High-level refinement engine for coordinate optimization.
+
+    Encapsulates the entire refinement workflow.
+
+    The engine is model-agnostic - it only cares about coordinates. All
+    model-specific logic (features, recycling, etc.) should be handled
+    inside the prediction callback.
+
+    Example:
+        >>> # User handles model and features
+        >>> class MyPredictor:
+        ...     def __init__(self, model, features):
+        ...         self.model = model
+        ...         self.features = features
+        ...         self.state = None  # Model-specific state
+        ...
+        ...     def __call__(self):
+        ...         # User's model logic
+        ...         output = self.model(self.features, self.state)
+        ...         self.state = output.get('state')
+        ...         return output['coordinates']  # Return [N, 3] tensor
+        >>>
+        >>> # Initialize predictor with YOUR model and features
+        >>> predictor = MyPredictor(my_model, my_features)
+        >>>
+        >>> # Initialize engine (only needs coordinates and loss)
+        >>> engine = RefinementEngine(config, loss_fn, structure_factor_calc)
+        >>>
+        >>> # Run refinement - engine just calls predictor()
+        >>> results = engine.run(
+        ...     reference_coordinates=ref_coords,
+        ...     prediction_callback=predictor,
+        ... )
+    """
+
+    def __init__(
+        self,
+        config: RefinementConfig,
+        loss_function: BaseLoss,
+        structure_factor_calculator: Any,
+        rigid_body_refine_fn: Callable | None = None,
+    ):
+        """Initialize refinement engine.
+
+        Args:
+            config: Refinement configuration
+            loss_function: Loss function instance
+            structure_factor_calculator: Structure factor calculator
+            rigid_body_refine_fn: Optional rigid body refinement function
+        """
+        self.config = config
+        self.loss_fn = loss_function
+        self.sfc = structure_factor_calculator
+        self.rbr_fn = rigid_body_refine_fn
+
+        # Setup output directory
+        self.output_dir = Path(config.output_dir) / config.run_note
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save config
+        self.config.to_yaml(self.output_dir / "config.yaml")
+
+        # Initialize tracking
+        self.checkpoint_manager = CheckpointManager(
+            self.output_dir, save_best_only=True
+        )
+
+        # Global best tracking
+        self.global_best_loss = float("inf")
+        self.global_best_state = {}
+
+        logger.info("Initialized RefinementEngine")
+        logger.info(f"Output directory: {self.output_dir}")
+        logger.info(
+            f"Config: {config.num_runs} runs × {config.num_iterations} iterations"
+        )
+
+    @timed
+    @gpu_memory_tracked
+    def run(
+        self,
+        reference_coordinates: torch.Tensor,
+        prediction_callback: Callable[[], torch.Tensor],
+        optimizer: torch.optim.Optimizer | None = None,
+        save_pdb_callback: Callable | None = None,
+    ) -> dict[str, Any]:
+        """Run complete refinement process.
+
+        Args:
+            reference_coordinates: Reference structure coordinates [N, 3]
+            prediction_callback: Callable that returns atomic data [N, 4]
+                where columns are [x, y, z, confidence/bfactor].
+                All model-specific logic (features, state, recycling)
+                should be handled inside this callback.
+                The callback is called with no arguments: callback()
+            optimizer: Optional pre-configured optimizer. If None, engine will not
+                      perform gradient-based optimization (useful for inference-only).
+            save_pdb_callback: Optional function to save PDB files,
+                              signature: callback(coordinates, path)
+
+        Returns:
+            Dictionary containing:
+                - best_loss: Best loss value achieved
+                - best_run: Run ID of best result
+                - best_iteration: Iteration of best result
+                - best_coordinates: Best coordinates
+        """
+        from LossLab.refinement.utils import number_to_letter
+
+        logger.info("=" * 60)
+        logger.info("Starting refinement")
+        logger.info("=" * 60)
+
+        for run_idx in range(self.config.num_runs):
+            run_id = number_to_letter(run_idx)
+            logger.info(f"\n{'=' * 60}")
+            logger.info(f"Run {run_id} ({run_idx + 1}/{self.config.num_runs})")
+            logger.info(f"{'=' * 60}")
+
+            run_results = self._run_single_refinement(
+                run_id=run_id,
+                reference_coordinates=reference_coordinates,
+                prediction_callback=prediction_callback,
+                optimizer=optimizer,
+                save_pdb_callback=save_pdb_callback,
+            )
+
+            # Update global best
+            if run_results["best_loss"] < self.global_best_loss:
+                self.global_best_loss = run_results["best_loss"]
+                self.global_best_state = {
+                    "run_id": run_id,
+                    "iteration": run_results["best_iteration"],
+                    "loss": run_results["best_loss"],
+                    "coordinates": run_results["best_coordinates"],
+                }
+
+        # Final summary
+        logger.info("\n" + "=" * 60)
+        logger.info("REFINEMENT COMPLETE")
+        logger.info("=" * 60)
+        logger.info(f"Best loss: {self.global_best_loss:.6f}")
+        logger.info(f"Best run: {self.global_best_state['run_id']}")
+        logger.info(f"Best iteration: {self.global_best_state['iteration']}")
+
+        # Save final best
+        self._save_final_best(save_pdb_callback)
+
+        return self.global_best_state
+
+    def _run_single_refinement(
+        self,
+        run_id: str,
+        reference_coordinates: torch.Tensor,
+        prediction_callback: Callable[[], torch.Tensor],
+        optimizer: torch.optim.Optimizer | None,
+        save_pdb_callback: Callable | None,
+    ) -> dict[str, Any]:
+        """Run single refinement iteration.
+
+        Args:
+            run_id: Run identifier
+            reference_coordinates: Reference coordinates
+            prediction_callback: Prediction function (no arguments)
+            optimizer: Optional optimizer
+            save_pdb_callback: PDB save function
+
+        Returns:
+            Dictionary with run results
+        """
+        # Initialize tracking
+        metrics = MetricsTracker(
+            self.output_dir, run_id, log_to_file=self.config.log_metrics
+        )
+        early_stopper = EarlyStopper(
+            patience=self.config.early_stopping_patience,
+            min_delta=self.config.early_stopping_min_delta,
+        )
+
+        # Track best for this run
+        run_best_loss = float("inf")
+        run_best_state = {
+            "iteration": 0,
+            "loss": float("inf"),
+            "coordinates": None,
+        }
+
+        # Progress bar
+        progress = tqdm(
+            range(self.config.num_iterations),
+            desc=f"Run {run_id}",
+        )
+
+        # Main refinement loop
+        for iteration in progress:
+            if optimizer is not None:
+                optimizer.zero_grad()
+
+            # Prediction - callback returns [N, 4]: xyz + confidence
+            prediction = prediction_callback()  # No arguments!
+            coordinates = prediction[:, :3]  # Extract xyz [N, 3]
+            confidence = prediction[:, 3]  # Extract confidence [N]
+
+            # Align to reference (using xyz only)
+            aligned_coords = kabsch_align(
+                coordinates,
+                reference_coordinates,
+            )
+
+            # Rigid body refinement (if enabled)
+            if self.config.use_rigid_body_refinement and self.rbr_fn is not None:
+                refined_coords, rbr_loss_track = self.rbr_fn(
+                    aligned_coords,
+                    self.loss_fn,
+                    self.sfc,
+                    domain_segs=self.config.domain_segments,
+                    lbfgs=self.config.rbr_use_lbfgs,
+                    lbfgs_lr=self.config.rbr_learning_rate,
+                )
+            else:
+                refined_coords = aligned_coords
+
+            # Compute loss
+            loss_result = self.loss_fn.compute(
+                refined_coords,
+                self.sfc,
+                return_metadata=True,
+            )
+
+            if isinstance(loss_result, tuple):
+                loss, metadata = loss_result
+            else:
+                loss = loss_result
+                metadata = {}
+
+            # Add mean confidence to metadata
+            metadata["mean_confidence"] = confidence.mean().item()
+
+            # Backward pass (only if optimizer provided)
+            if optimizer is not None:
+                if loss.requires_grad:
+                    loss.backward()
+                    optimizer.step()
+                else:
+                    logger.warning(f"Iteration {iteration}: Loss has no gradients")
+
+            # Track metrics
+            metrics.log(
+                iteration=iteration,
+                loss=loss.item(),
+                **metadata,
+            )
+
+            # Update progress bar
+            progress.set_postfix(
+                loss=f"{loss.item():.4f}",
+                memory=f"{torch.cuda.max_memory_allocated() / 1024**3:.1f}G",
+            )
+
+            # Check for new best
+            if loss.item() < run_best_loss:
+                run_best_loss = loss.item()
+                run_best_state = {
+                    "iteration": iteration,
+                    "loss": loss.item(),
+                    "coordinates": refined_coords.detach().cpu().clone(),
+                }
+
+                # Save checkpoint
+                self.checkpoint_manager.save_checkpoint(
+                    iteration=iteration,
+                    run_id=run_id,
+                    loss=loss.item(),
+                    coordinates=run_best_state["coordinates"],
+                )
+
+            # Save PDB periodically
+            if (
+                save_pdb_callback
+                and iteration % self.config.save_every_n_iterations == 0
+            ):
+                pdb_path = self.output_dir / f"{run_id}_{iteration}_refined.pdb"
+                save_pdb_callback(refined_coords, pdb_path)
+
+            # Early stopping check
+            if early_stopper.should_stop(loss.item()):
+                logger.info(f"Early stopping at iteration {iteration}")
+                break
+
+            # Clear cache periodically
+            if iteration % 10 == 0:
+                torch.cuda.empty_cache()
+
+        # Save metrics
+        metrics.save()
+
+        # Return results with proper keys
+        return {
+            "best_loss": run_best_loss,
+            "best_iteration": run_best_state["iteration"],
+            "best_coordinates": run_best_state["coordinates"],
+        }
+
+    def _save_final_best(self, save_pdb_callback: Callable | None = None) -> None:
+        """Save final best results.
+
+        Args:
+            save_pdb_callback: Optional PDB save function
+        """
+        if not self.global_best_state:
+            logger.warning("No best state to save")
+            return
+
+        # Save PDB if callback provided
+        if save_pdb_callback:
+            pdb_path = self.output_dir / "final_best_model.pdb"
+            save_pdb_callback(self.global_best_state["coordinates"], pdb_path)
+
+        # Save coordinates as tensor
+        torch.save(
+            self.global_best_state["coordinates"],
+            self.output_dir / "final_best_coordinates.pt",
+        )
+
+        # Save summary
+        import json
+
+        summary = {
+            "best_loss": self.global_best_loss,
+            "best_run": self.global_best_state["run_id"],
+            "best_iteration": self.global_best_state["iteration"],
+        }
+
+        with open(self.output_dir / "refinement_summary.json", "w") as f:
+            json.dump(summary, f, indent=2)
+
+        logger.info(f"Saved final best results to {self.output_dir}")
