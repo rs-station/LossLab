@@ -1,5 +1,7 @@
 """Real-space loss functions for comparing model maps with target maps."""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Literal
 
 import gemmi
