@@ -24,6 +24,7 @@ dependencies = [
     "numpy>=1.24.0",
     "torch>=2.0.0",
     "gemmi>=0.6.0",
+    "mdtraj>=1.9.7",
     "geomloss>=0.2.6",
     "loguru>=0.7.0",
     "scipy>=1.10.0",
@@ -36,6 +37,10 @@ tests = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-xdist>=3.0.0",
+]
+
+wandb = [
+    "wandb>=0.22.3",
 ]
 
 CI = [

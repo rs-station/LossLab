@@ -57,8 +57,18 @@ class RefinementConfig:
     output_dir: str | Path = "./output"
     run_note: str = "refinement"
     save_every_n_iterations: int = 50
-    save_trajectory: bool = True
+    save_best_pdb: bool = True
+    save_trajectory_pdb: bool = True
+    save_trajectory_interval: int = 1
     save_model_maps: bool = False
+
+    # Weights & Biases logging
+    use_wandb: bool = False
+    wandb_project: str | None = None
+    wandb_entity: str | None = None
+    wandb_name: str | None = None
+    wandb_tags: list[str] | None = None
+    wandb_notes: str | None = None
 
     # Early stopping
     early_stopping_patience: int = 150
