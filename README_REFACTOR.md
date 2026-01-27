@@ -179,12 +179,12 @@ mask = create_spherical_mask(grid_shape, center, radius, voxel_size, device)
 smoothed = gaussian_smooth_3d(map_tensor, sigma_angstrom=4.0, voxel_size)
 ```
 
-## 📊 Comparison: Old vs New
+## Comparison with og ROCKET prototype
 
 ### Before (ROCKET)
 
 ```python
-# ~300+ lines of boilerplate...
+# ~300+ lines 
 for n in range(num_runs):
     run_id = number_to_letter(n)
     # Setup features, bias, optimizer, tracking, progress bar...
@@ -222,152 +222,3 @@ results = engine.run(reference_coords, predict_callback, features)
 
 print(f"Best loss: {results['best_loss']:.6f}")
 ```
-
-**Improvements:**
-- ✅ **83% less code** (300+ lines → 50 lines)
-- ✅ **Clearer intent** - main logic is obvious
-- ✅ **Better testability** - each component tested independently
-- ✅ **More maintainable** - changes isolated to specific modules
-- ✅ **Easier to extend** - add new losses, metrics, etc.
-
-## 🧪 Testing
-
-Run tests with pytest:
-
-```bash
-# Run all tests
-pytest test/ -v
-
-# Run specific test module
-pytest test/test_geometry.py -v
-
-# Run with coverage
-pytest test/ --cov=LossLab --cov-report=html
-```
-
-**Test coverage:**
-- ✅ Geometry utilities (Kabsch alignment, RMSD)
-- ✅ Metrics tracking (logging, saving, best finding)
-- ✅ Checkpoint management (save, load, best tracking)
-- 🚧 Loss functions (coming soon)
-- 🚧 Refinement engine (coming soon)
-
-## 📚 Examples
-
-See the `examples/` directory:
-
-- **`simple_refinement.py`**: Complete working example with clean API
-- **`comparison_old_vs_new.py`**: Side-by-side comparison of approaches
-- **`README.md`**: Detailed examples documentation
-
-## 🎓 Advanced Usage
-
-### Custom Loss Functions
-
-```python
-from LossLab.losses import BaseLoss
-
-class MyCustomLoss(BaseLoss):
-    def compute(self, coordinates, **kwargs):
-        # Your custom loss logic
-        model_map = self.generate_map(coordinates)
-        loss = your_loss_function(model_map, self.target)
-        return loss
-
-# Use it
-custom_loss = MyCustomLoss(target_data, device="cuda:0")
-engine = RefinementEngine(config, custom_loss, sfc)
-```
-
-### Custom Callbacks
-
-```python
-def my_save_callback(coordinates, path):
-    # Custom PDB saving with extra annotations
-    pdb_obj.atom_pos = coordinates.cpu().numpy()
-    pdb_obj.atom_b_iso = custom_bfactors
-    pdb_obj.savePDB(path)
-
-results = engine.run(
-    reference_coords,
-    predict_callback,
-    features,
-    save_pdb_callback=my_save_callback,
-)
-```
-
-### Multiple Experiments
-
-```python
-# Try different hyperparameters easily
-for lr in [1e-2, 1e-3, 1e-4]:
-    config = RefinementConfig(
-        learning_rate_additive=lr,
-        output_dir=f"./output_lr{lr}",
-    )
-    engine = RefinementEngine(config, loss_fn, sfc)
-    results = engine.run(reference_coords, predict_callback, features)
-```
-
-## 🔧 Development
-
-### Adding a New Loss Function
-
-1. Create new loss class inheriting from `BaseLoss`
-2. Implement the `compute()` method
-3. Add to `losses/__init__.py`
-4. Write tests in `test/test_losses.py`
-
-```python
-# losses/my_new_loss.py
-from LossLab.losses.base import BaseLoss
-
-class MyNewLoss(BaseLoss):
-    def __init__(self, target_data, device="cuda:0", **kwargs):
-        super().__init__(device)
-        self.target = target_data
-        # Additional initialization
-    
-    def compute(self, coordinates, **kwargs):
-        # Loss computation logic
-        return loss_value
-```
-
-### Adding New Utilities
-
-Add to appropriate module in `utils/`:
-- Geometry operations → `utils/geometry.py`
-- Map operations → `utils/map_utils.py`
-- Common patterns → `utils/decorators.py`
-
-## 📖 Documentation
-
-- **Examples**: `examples/README.md`
-- **API Reference**: See docstrings in source code
-- **Tests**: `test/` directory shows usage patterns
-
-## 🤝 Contributing
-
-When adding features:
-
-1. ✅ Follow the modular design pattern
-2. ✅ Add docstrings with examples
-3. ✅ Write unit tests
-4. ✅ Keep the API simple and intuitive
-5. ✅ Update examples if needed
-
-## 📝 License
-
-[Your license here]
-
-## 🙏 Acknowledgments
-
-Refactored from the original ROCKET codebase with focus on:
-- Cleaner architecture
-- Better separation of concerns
-- Improved testability
-- Reduced boilerplate
-
----
-
-**Questions?** Open an issue or check the examples directory for detailed usage patterns.
