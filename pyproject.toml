@@ -24,6 +24,8 @@ dependencies = [
     "numpy>=1.24.0",
     "torch>=2.0.0",
     "gemmi>=0.6.0",
+    "geomloss>=0.2.6",
+    "loguru>=0.7.0",
 ]
 
 [project.optional-dependencies]
