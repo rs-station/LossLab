@@ -29,11 +29,14 @@ def test_kabsch_align_rotation():
 
     # Apply known rotation
     angle = np.pi / 4
-    rotation = torch.tensor([
-        [np.cos(angle), -np.sin(angle), 0],
-        [np.sin(angle), np.cos(angle), 0],
-        [0, 0, 1]
-    ], dtype=torch.float32)
+    rotation = torch.tensor(
+        [
+            [np.cos(angle), -np.sin(angle), 0],
+            [np.sin(angle), np.cos(angle), 0],
+            [0, 0, 1],
+        ],
+        dtype=torch.float32,
+    )
 
     rotated = torch.matmul(original, rotation.T)
 

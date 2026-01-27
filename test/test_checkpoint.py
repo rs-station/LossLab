@@ -162,9 +162,7 @@ def test_multiple_tensors():
         )
 
         # Load both
-        loaded = manager.load_checkpoint(
-            "C", 3, ["msa_bias", "feat_weights"]
-        )
+        loaded = manager.load_checkpoint("C", 3, ["msa_bias", "feat_weights"])
 
         assert "msa_bias" in loaded
         assert "feat_weights" in loaded
