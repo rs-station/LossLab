@@ -121,16 +121,18 @@ class RefinementEngine:
         self.checkpoint_manager = CheckpointManager(
             self.output_dir, save_best_only=True
         )
-        
+
         # Initialize trajectory writer if PDB template provided
         self.trajectory_writer = None
-        if pdb_template is not None and (config.save_best_pdb or config.save_trajectory_pdb):
+        if pdb_template is not None and (
+            config.save_best_pdb or config.save_trajectory_pdb
+        ):
             # ADD THIS LOGGING
             logger.info(f"Initializing TrajectoryWriter with template: {pdb_template}")
             logger.info(f"  Type: {type(pdb_template)}")
             logger.info(f"  save_best_pdb: {config.save_best_pdb}")
             logger.info(f"  save_trajectory_pdb: {config.save_trajectory_pdb}")
-            
+
             # TrajectoryWriter will create its own PDBParser from the template file
             # This ensures it gets ALL atoms, not filtered versions
             self.trajectory_writer = TrajectoryWriter(
@@ -139,9 +141,12 @@ class RefinementEngine:
                 save_interval=config.save_trajectory_interval,
             )
         else:
-            logger.warning("TrajectoryWriter not initialized - no PDB template provided or saving disabled")
+            logger.warning(
+                "TrajectoryWriter not initialized - no PDB template provided "
+                "or saving disabled"
+            )
             self.trajectory_writer = None
-        
+
         # Initialize wandb logger if enabled
         if config.use_wandb:
             self.wandb_logger = WandbLogger(
@@ -154,21 +159,27 @@ class RefinementEngine:
             )
         else:
             self.wandb_logger = None
-        
+
         # Initialize trajectory writer AFTER wandb logger for real-time streaming
         if config.save_trajectory_pdb and pdb_template is not None:
-            logger.info("Initializing TrajectoryWriter with real-time wandb streaming...")
-            
+            logger.info(
+                "Initializing TrajectoryWriter with real-time wandb streaming..."
+            )
+
             # TrajectoryWriter will create its own PDBParser from the template file
             # This ensures it gets ALL atoms, not filtered versions
             self.trajectory_writer = TrajectoryWriter(
                 output_dir=self.output_dir,
                 pdb_template_path=pdb_template,
                 save_interval=config.save_trajectory_interval,
-                wandb_logger=self.wandb_logger,  # Pass wandb logger for real-time streaming
+                # Pass wandb logger for real-time streaming.
+                wandb_logger=self.wandb_logger,
             )
         else:
-            logger.warning("TrajectoryWriter not initialized - no PDB template provided or saving disabled")
+            logger.warning(
+                "TrajectoryWriter not initialized - no PDB template provided "
+                "or saving disabled"
+            )
             self.trajectory_writer = None
 
         # Global best tracking
@@ -251,28 +262,32 @@ class RefinementEngine:
 
         # Save final best
         self._save_final_best(save_pdb_callback)
-        
+
         # Close trajectory writers BEFORE logging to wandb
         if self.trajectory_writer is not None:
             logger.info("Closing trajectory writers...")
             self.trajectory_writer.close()
-        
+
         # Finish wandb run
         if self.wandb_logger is not None:
             logger.info("Logging final results to W&B...")
             # Log final best artifacts
             if self.config.save_best_pdb:
                 best_pdb_path = self.output_dir / "trajectory" / "best.pdb"
-                logger.info(f"Checking for best PDB: {best_pdb_path}, exists: {best_pdb_path.exists()}")
+                logger.info(
+                    "Checking for best PDB: %s, exists: %s",
+                    best_pdb_path,
+                    best_pdb_path.exists(),
+                )
                 if best_pdb_path.exists():
                     self.wandb_logger.log_pdb(best_pdb_path, "best_model")
                     # Log as interactive 3D structure
                     logger.info("Logging final best as 3D molecule...")
                     self.wandb_logger.log_molecule_3d(
                         best_pdb_path,
-                        caption=f"Best Model (Loss: {self.global_best_loss:.4f})"
+                        caption=f"Best Model (Loss: {self.global_best_loss:.4f})",
                     )
-            
+
             # Log final trajectory animation for interactive playback
             if self.config.save_trajectory_pdb:
                 trajectory_dir = self.output_dir / "trajectory"
@@ -280,7 +295,7 @@ class RefinementEngine:
                     for traj_file in trajectory_dir.glob("*_refinement_trajectory.pdb"):
                         logger.info(f"Creating trajectory animation: {traj_file.name}")
                         self.wandb_logger.log_trajectory_3d(traj_file, max_frames=50)
-            
+
             self.wandb_logger.log_config_file(self.output_dir / "config.yaml")
             logger.info("Finishing W&B run...")
             self.wandb_logger.finish()
@@ -293,17 +308,17 @@ class RefinementEngine:
         reference_coordinates: torch.Tensor,
     ) -> torch.Tensor:
         """Process coordinates through alignment and optional RBR.
-        
+
         Args:
             coordinates: Raw predicted coordinates [N, 3]
             reference_coordinates: Reference coordinates [N, 3]
-            
+
         Returns:
             Refined coordinates [N, 3]
         """
         # Align to reference
         aligned_coords = kabsch_align(coordinates, reference_coordinates)
-        
+
         # Apply rigid body refinement if enabled
         if self.config.use_rigid_body_refinement and self.rbr_fn is not None:
             refined_coords, _ = self.rbr_fn(
@@ -315,37 +330,35 @@ class RefinementEngine:
                 lbfgs_lr=self.config.rbr_learning_rate,
             )
             return refined_coords
-        
+
         return aligned_coords
-    
+
     def _compute_loss_with_metadata(
         self,
         coordinates: torch.Tensor,
         confidence: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute loss and extract metadata.
-        
+
         Args:
             coordinates: Coordinates to compute loss on [N, 3]
             confidence: Per-atom confidence values [N]
-            
+
         Returns:
             Tuple of (loss, metadata_dict)
         """
-        loss_result = self.loss_fn.compute(
-            coordinates, self.sfc, return_metadata=True
-        )
-        
+        loss_result = self.loss_fn.compute(coordinates, self.sfc, return_metadata=True)
+
         # Unpack loss and metadata
         loss, metadata = (
             loss_result if isinstance(loss_result, tuple) else (loss_result, {})
         )
-        
+
         # Add confidence to metadata
         metadata["mean_confidence"] = confidence.mean().item()
-        
+
         return loss, metadata
-    
+
     def _optimize(
         self,
         loss: torch.Tensor,
@@ -353,7 +366,7 @@ class RefinementEngine:
         iteration: int,
     ) -> None:
         """Perform optimization step if optimizer is provided.
-        
+
         Args:
             loss: Loss tensor to backpropagate
             optimizer: Optional optimizer
@@ -361,14 +374,14 @@ class RefinementEngine:
         """
         if optimizer is None:
             return
-        
+
         if not loss.requires_grad:
             logger.warning(f"Iteration {iteration}: Loss has no gradients")
             return
-        
+
         loss.backward()
         optimizer.step()
-    
+
     def _update_best_and_save(
         self,
         loss: torch.Tensor,
@@ -381,7 +394,7 @@ class RefinementEngine:
         confidence: torch.Tensor | None = None,
     ) -> tuple[float, dict]:
         """Update best state and save checkpoints/PDFs.
-        
+
         Args:
             loss: Current loss value
             refined_coords: Current refined coordinates
@@ -391,12 +404,12 @@ class RefinementEngine:
             run_best_state: Best state so far in this run
             save_pdb_callback: Optional callback to save PDB files
             confidence: Optional confidence/B-factor values
-            
+
         Returns:
             Tuple of (updated_best_loss, updated_best_state)
         """
         loss_value = loss.item()
-        
+
         # Check if this is a new best
         if loss_value < run_best_loss:
             run_best_loss = loss_value
@@ -405,7 +418,7 @@ class RefinementEngine:
                 "loss": loss_value,
                 "coordinates": refined_coords.detach().cpu().clone(),
             }
-            
+
             # Save checkpoint for new best
             self.checkpoint_manager.save_checkpoint(
                 iteration=iteration,
@@ -413,7 +426,7 @@ class RefinementEngine:
                 loss=loss_value,
                 coordinates=run_best_state["coordinates"],
             )
-            
+
             # Save best PDB structure
             if self.trajectory_writer is not None:
                 self.trajectory_writer.save_best(
@@ -422,7 +435,7 @@ class RefinementEngine:
                     iteration=iteration,
                     b_factors=confidence,
                 )
-        
+
         # Save trajectory frame
         if self.trajectory_writer is not None:
             self.trajectory_writer.save_frame(
@@ -432,7 +445,7 @@ class RefinementEngine:
                 b_factors=confidence,
                 loss=loss_value,
             )
-        
+
         # Periodic PDB saving via callback (legacy support)
         if (
             save_pdb_callback is not None
@@ -440,7 +453,7 @@ class RefinementEngine:
         ):
             pdb_path = self.output_dir / f"{run_id}_{iteration}_refined.pdb"
             save_pdb_callback(refined_coords, pdb_path)
-        
+
         return run_best_loss, run_best_state
 
     def _run_single_refinement(
@@ -512,16 +525,14 @@ class RefinementEngine:
                 loss=loss.item(),
                 **metadata,
             )
-            
+
             # Log to wandb
             if self.wandb_logger is not None:
                 wandb_metrics = {
                     f"{run_id}/loss": loss.item(),
                     f"{run_id}/iteration": iteration,
                 }
-                wandb_metrics.update({
-                    f"{run_id}/{k}": v for k, v in metadata.items()
-                })
+                wandb_metrics.update({f"{run_id}/{k}": v for k, v in metadata.items()})
                 self.wandb_logger.log(wandb_metrics, step=iteration)
 
             # Update progress bar
@@ -563,14 +574,14 @@ class RefinementEngine:
 
     def _save_final_best(self, save_pdb_callback: Callable | None = None) -> None:
         """Save final best results.
-        
+
         Args:
             save_pdb_callback: Optional PDB save function
         """
         if not self.global_best_state:
             logger.warning("No best state to save")
             return
-        
+
         # Log trajectory files to wandb if enabled
         if self.wandb_logger:
             trajectory_dir = self.output_dir / "trajectory"
@@ -583,13 +594,13 @@ class RefinementEngine:
                         artifact_type="trajectory",
                     )
                     logger.info(f"Logged trajectory to W&B: {traj_file.name}")
-        
+
         # Save coordinates as tensor
         torch.save(
             self.global_best_state["coordinates"],
             self.output_dir / "final_best_coordinates.pt",
         )
-        
+
         # Save summary
         import json
 

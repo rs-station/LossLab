@@ -70,12 +70,10 @@ def main():
         run_note="jan26",
         save_every_n_iterations=50,
         early_stopping_patience=150,
-        
         # Trajectory saving
-        save_best_pdb=True,              # Save best PDB
-        save_trajectory_pdb=True,         # Save full trajectory
-        save_trajectory_interval=1,      # Save every iteration
-        
+        save_best_pdb=True,  # Save best PDB
+        save_trajectory_pdb=True,  # Save full trajectory
+        save_trajectory_interval=1,  # Save every iteration
         # W&B logging (optional - set use_wandb=False to disable)
         use_wandb=True,
         wandb_entity="af840-columbia-university",
@@ -214,11 +212,19 @@ def main():
     print(f"Best iteration: {results['iteration']}")
     print(f"Output directory: {config.output_dir / config.run_note}")
     print("\nSaved files:")
-    print(f"  - trajectory/best_{results['run_id']}_iter{results['iteration']}.pdb  (best model)")
-    print(f"  - trajectory/{results['run_id']}_refinement_trajectory.pdb  (full trajectory)")
+    best_path = (
+        f"  - trajectory/best_{results['run_id']}_iter"
+        f"{results['iteration']}.pdb  (best model)"
+    )
+    trajectory_path = (
+        f"  - trajectory/{results['run_id']}_refinement_trajectory.pdb  "
+        "(full trajectory)"
+    )
+    print(best_path)
+    print(trajectory_path)
     print(f"  - {results['run_id']}_metrics.npz  (metrics)")
-    print(f"  - config.yaml  (configuration)")
-    
+    print("  - config.yaml  (configuration)")
+
     if config.use_wandb:
         print("\nView interactive 3D trajectory animation at: https://wandb.ai/")
 
