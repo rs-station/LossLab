@@ -189,9 +189,9 @@ class WandbLogger:
         trajectory_path: str | Path,
         max_frames: int = 50,
     ) -> None:
-        """Log multi-model PDB trajectory with 3D visualization.
+        """Log multi-model PDB trajectory with 3D animated visualization.
         
-        Creates a table showing structure evolution across iterations.
+        Creates both a table view and an animated 3D viewer using 3Dmol.js.
         
         Args:
             trajectory_path: Path to multi-model PDB file
@@ -210,44 +210,181 @@ class WandbLogger:
             
             logger.info(f"Logging 3D trajectory from {trajectory_path}")
             
-            # Load trajectory to split into individual frames
+            # Load trajectory
             traj = md.load(str(trajectory_path))
             n_frames = min(traj.n_frames, max_frames)
             
-            logger.info(f"Creating wandb table with {n_frames} frames...")
+            # Create animated HTML viewer with 3Dmol.js
+            html_path = trajectory_path.parent / f"{trajectory_path.stem}_animation.html"
+            self._create_3dmol_animation(trajectory_path, html_path, n_frames)
             
-            # Create a table with one molecule per row
-            columns = ["iteration", "structure"]
-            table_data = []
-            temp_files = []
+            # Log the animated HTML viewer
+            wandb.log({f"trajectory_animation_{trajectory_path.stem}": wandb.Html(str(html_path))})
             
-            for i in range(n_frames):
-                # Extract single frame and save to temp file
-                temp_pdb = trajectory_path.parent / f"_temp_frame_{i}.pdb"
-                traj[i].save_pdb(str(temp_pdb))
-                temp_files.append(temp_pdb)
-                
-                # Create wandb.Molecule for this frame
-                molecule = wandb.Molecule(str(temp_pdb))
-                table_data.append([i, molecule])
+            logger.info(f"✓ Logged animated 3D trajectory with {n_frames} frames: {trajectory_path.name}")
             
-            # Log as table (this creates the animation slider in wandb)
-            table = wandb.Table(columns=columns, data=table_data)
-            wandb.log({f"trajectory_3d_{trajectory_path.stem}": table})
-            
-            # Clean up temp files after logging
-            for temp_pdb in temp_files:
-                try:
-                    temp_pdb.unlink()
-                except Exception:
-                    pass
-            
-            logger.info(f"✓ Logged 3D trajectory with {n_frames} frames: {trajectory_path.name}")
         except ImportError:
-            logger.warning("mdtraj not available, cannot split trajectory into frames")
+            logger.warning("mdtraj not available, cannot load trajectory")
         except Exception as e:
             logger.warning(f"Failed to log 3D trajectory {trajectory_path}: {e}")
             logger.exception(e)
+    
+    def _create_3dmol_animation(
+        self,
+        pdb_path: Path,
+        output_html: Path,
+        n_frames: int,
+    ) -> None:
+        """Create an HTML file with 3Dmol.js animation of trajectory.
+        
+        Args:
+            pdb_path: Path to multi-model PDB file
+            output_html: Path for output HTML file
+            n_frames: Number of frames in trajectory
+        """
+        # Read the PDB file content
+        with open(pdb_path, 'r') as f:
+            pdb_content = f.read()
+        
+        # Escape for JavaScript
+        pdb_content_js = pdb_content.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$')
+        
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trajectory Animation - {pdb_path.stem}</title>
+    <script src="https://3Dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
+    <style>
+        body {{ margin: 0; padding: 10px; font-family: Arial, sans-serif; background: white; }}
+        #container {{ 
+            width: 100%; 
+            max-width: 700px; 
+            height: 500px; 
+            position: relative; 
+            margin: 0 auto;
+            border: 1px solid #ddd;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        #controls {{ text-align: center; margin: 15px; }}
+        button {{ 
+            margin: 3px; 
+            padding: 8px 16px; 
+            font-size: 13px; 
+            cursor: pointer;
+            border: 1px solid #ccc;
+            background: #f5f5f5;
+            border-radius: 4px;
+        }}
+        button:hover {{ background: #e0e0e0; }}
+        #frameInfo {{ 
+            margin: 10px; 
+            font-size: 15px; 
+            font-weight: bold; 
+            text-align: center;
+        }}
+        h2 {{ text-align: center; margin: 10px 0; font-size: 18px; }}
+        label {{ font-size: 13px; }}
+        #speed {{ vertical-align: middle; }}
+    </style>
+</head>
+<body>
+    <h2 style="text-align: center;">Trajectory: {pdb_path.stem}</h2>
+    <div id="frameInfo">Frame: 0 / {n_frames - 1}</div>
+    <div id="container"></div>
+    <div id="controls">
+        <button onclick="playAnimation()">▶ Play</button>
+        <button onclick="pauseAnimation()">⏸ Pause</button>
+        <button onclick="resetAnimation()">⏮ Reset</button>
+        <button onclick="prevFrame()">◀ Prev</button>
+        <button onclick="nextFrame()">▶ Next</button>
+        <label>Speed: <input type="range" id="speed" min="100" max="2000" value="500" step="100"> <span id="speedLabel">500ms</span></label>
+    </div>
+    
+    <script>
+        let viewer = null;
+        let currentFrame = 0;
+        let isPlaying = false;
+        let animationInterval = null;
+        let animationSpeed = 500;
+        let numFrames = {n_frames};
+        
+        // Initialize viewer
+        viewer = $3Dmol.createViewer("container", {{
+            backgroundColor: "white"
+        }});
+        
+        // Load multi-model PDB
+        const pdbData = `{pdb_content_js}`;
+        viewer.addModelsAsFrames(pdbData, "pdb");
+        
+        // Style and render
+        viewer.setStyle({{}}, {{cartoon: {{color: "spectrum"}}}});
+        viewer.zoomTo();
+        viewer.animate({{loop: "forward", reps: 0}});
+        viewer.stopAnimate();  // Start paused
+        viewer.render();
+        
+        function updateFrameDisplay() {{
+            document.getElementById('frameInfo').textContent = `Frame: ${{currentFrame}} / ${{numFrames - 1}}`;
+        }}
+        
+        function showFrame(frameNum) {{
+            currentFrame = frameNum % numFrames;
+            viewer.setFrame(currentFrame);
+            viewer.render();
+            updateFrameDisplay();
+        }}
+        
+        function nextFrame() {{
+            showFrame(currentFrame + 1);
+        }}
+        
+        function prevFrame() {{
+            showFrame(currentFrame - 1 + numFrames);
+        }}
+        
+        function playAnimation() {{
+            if (isPlaying) return;
+            isPlaying = true;
+            animationInterval = setInterval(() => {{
+                nextFrame();
+            }}, animationSpeed);
+        }}
+        
+        function pauseAnimation() {{
+            isPlaying = false;
+            if (animationInterval) {{
+                clearInterval(animationInterval);
+                animationInterval = null;
+            }}
+        }}
+        
+        function resetAnimation() {{
+            pauseAnimation();
+            showFrame(0);
+        }}
+        
+        // Speed control
+        document.getElementById('speed').addEventListener('input', function(e) {{
+            animationSpeed = parseInt(e.target.value);
+            document.getElementById('speedLabel').textContent = animationSpeed + 'ms';
+            if (isPlaying) {{
+                pauseAnimation();
+                playAnimation();
+            }}
+        }});
+        
+        updateFrameDisplay();
+    </script>
+</body>
+</html>
+"""
+        
+        with open(output_html, 'w') as f:
+            f.write(html_content)
+        
+        logger.info(f"Created 3Dmol.js animation HTML: {output_html}")
     
     def log_coordinates(
         self,

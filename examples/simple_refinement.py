@@ -31,7 +31,7 @@ def main():
     target_map = gemmi.read_ccp4_map("./masked_x395.ccp4")
     target_map.setup(0.0)
 
-    input_pdb = PDBParser("./x395-pred-aligned.pdb")
+    input_pdb = PDBParser("./x395_no_altB.pdb")
     input_pdb.set_spacegroup("P 1")
     input_pdb.set_unitcell(target_map.grid.unit_cell)
 
@@ -61,7 +61,7 @@ def main():
 
     # Configure refinement
     config = RefinementConfig(
-        num_iterations=30,
+        num_iterations=10,
         num_runs=1,
         learning_rate_additive=1e-3,
         learning_rate_multiplicative=1e-3,
@@ -70,13 +70,27 @@ def main():
         run_note="jan26",
         save_every_n_iterations=50,
         early_stopping_patience=150,
+        
+        # Trajectory saving
+        save_best_pdb=True,              # Save best PDB
+        save_trajectory_pdb=True,         # Save full trajectory
+        save_trajectory_interval=1,      # Save every iteration
+        
+        # W&B logging (optional - set use_wandb=False to disable)
+        use_wandb=True,
+        wandb_entity="af840-columbia-university",
+        wandb_project="x395-refinement",
+        wandb_name="x395_real_refinement",
+        wandb_tags=["cryo-em", "x395", "alphafold"],
+        wandb_notes="Real refinement with AlphaFold and trajectory visualization",
     )
 
-    # Create refinement engine
+    # Create refinement engine with PDB template for trajectory saving
     engine = RefinementEngine(
         config=config,
         loss_function=loss_fn,
         structure_factor_calculator=structure_factor_calc,
+        pdb_template="./x395_no_altB.pdb",
     )
 
     # Reference coordinates
@@ -199,6 +213,14 @@ def main():
     print(f"Best run: {results['run_id']}")
     print(f"Best iteration: {results['iteration']}")
     print(f"Output directory: {config.output_dir / config.run_note}")
+    print("\nSaved files:")
+    print(f"  - trajectory/best_{results['run_id']}_iter{results['iteration']}.pdb  (best model)")
+    print(f"  - trajectory/{results['run_id']}_refinement_trajectory.pdb  (full trajectory)")
+    print(f"  - {results['run_id']}_metrics.npz  (metrics)")
+    print(f"  - config.yaml  (configuration)")
+    
+    if config.use_wandb:
+        print("\nView interactive 3D trajectory animation at: https://wandb.ai/")
 
 
 if __name__ == "__main__":
