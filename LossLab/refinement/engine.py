@@ -143,17 +143,33 @@ class RefinementEngine:
             self.trajectory_writer = None
         
         # Initialize wandb logger if enabled
-        self.wandb_logger = None
         if config.use_wandb:
             self.wandb_logger = WandbLogger(
-                project=config.wandb_project or "losslab-refinement",
+                project=config.wandb_project,
                 entity=config.wandb_entity,
-                name=config.wandb_name or config.run_note,
+                name=config.wandb_name,
                 config=config,
                 tags=config.wandb_tags,
                 notes=config.wandb_notes,
-                enabled=True,
             )
+        else:
+            self.wandb_logger = None
+        
+        # Initialize trajectory writer AFTER wandb logger for real-time streaming
+        if config.save_trajectory_pdb and pdb_template is not None:
+            logger.info("Initializing TrajectoryWriter with real-time wandb streaming...")
+            
+            # TrajectoryWriter will create its own PDBParser from the template file
+            # This ensures it gets ALL atoms, not filtered versions
+            self.trajectory_writer = TrajectoryWriter(
+                output_dir=self.output_dir,
+                pdb_template_path=pdb_template,
+                save_interval=config.save_trajectory_interval,
+                wandb_logger=self.wandb_logger,  # Pass wandb logger for real-time streaming
+            )
+        else:
+            logger.warning("TrajectoryWriter not initialized - no PDB template provided or saving disabled")
+            self.trajectory_writer = None
 
         # Global best tracking
         self.global_best_loss = float("inf")

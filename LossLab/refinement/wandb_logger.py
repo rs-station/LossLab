@@ -256,36 +256,36 @@ class WandbLogger:
     <title>Trajectory Animation - {pdb_path.stem}</title>
     <script src="https://3Dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
     <style>
-        body {{ margin: 0; padding: 10px; font-family: Arial, sans-serif; background: white; }}
+        body {{ margin: 0; padding: 5px; font-family: Arial, sans-serif; background: white; }}
         #container {{ 
             width: 100%; 
-            max-width: 700px; 
-            height: 500px; 
+            max-width: 500px; 
+            height: 350px; 
             position: relative; 
             margin: 0 auto;
             border: 1px solid #ddd;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }}
-        #controls {{ text-align: center; margin: 15px; }}
+        #controls {{ text-align: center; margin: 10px; }}
         button {{ 
-            margin: 3px; 
-            padding: 8px 16px; 
-            font-size: 13px; 
+            margin: 2px; 
+            padding: 6px 12px; 
+            font-size: 12px; 
             cursor: pointer;
             border: 1px solid #ccc;
             background: #f5f5f5;
-            border-radius: 4px;
+            border-radius: 3px;
         }}
         button:hover {{ background: #e0e0e0; }}
         #frameInfo {{ 
-            margin: 10px; 
-            font-size: 15px; 
+            margin: 8px; 
+            font-size: 13px; 
             font-weight: bold; 
             text-align: center;
         }}
-        h2 {{ text-align: center; margin: 10px 0; font-size: 18px; }}
-        label {{ font-size: 13px; }}
-        #speed {{ vertical-align: middle; }}
+        h2 {{ text-align: center; margin: 8px 0; font-size: 16px; }}
+        label {{ font-size: 12px; }}
+        #speed {{ vertical-align: middle; width: 100px; }}
     </style>
 </head>
 <body>

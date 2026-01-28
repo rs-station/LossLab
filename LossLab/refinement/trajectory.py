@@ -29,6 +29,7 @@ class TrajectoryWriter:
         output_dir: Path,
         pdb_template_path: str | Path,
         save_interval: int = 10,
+        wandb_logger = None,
     ):
         """Initialize trajectory writer.
         
@@ -36,17 +37,20 @@ class TrajectoryWriter:
             output_dir: Output directory
             pdb_template_path: Path to PDB template file
             save_interval: Save interval for individual frames (not used with streaming)
+            wandb_logger: Optional WandbLogger for real-time streaming
         """
         self.output_dir = Path(output_dir) / "trajectory"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         self.pdb_template_path = Path(pdb_template_path)
         self.save_interval = save_interval
+        self.wandb_logger = wandb_logger
         
         # Track writers per run_id
         self.traj_writers = {}
         self.mdtraj_template = None
         self.topology = None
+        self.frame_count = {}  # Track frame count per run_id for real-time logging
         
         logger.info(f"TrajectoryWriter initialization:")
         logger.info(f"  MDTRAJ_AVAILABLE: {MDTRAJ_AVAILABLE}")
@@ -132,6 +136,29 @@ class TrajectoryWriter:
                 writer._file.flush()
             
             logger.debug(f"✓ Saved frame for run {run_id}, iteration {iteration}")
+            
+            # Real-time wandb logging
+            if self.wandb_logger is not None:
+                self.frame_count[run_id] = self.frame_count.get(run_id, 0) + 1
+                # Log the frame as a 3D molecule to wandb
+                try:
+                    temp_frame_path = self.output_dir / f"_temp_{run_id}_frame.pdb"
+                    # Save single frame temporarily
+                    coords_angstrom = coordinates.reshape(1, -1, 3)
+                    temp_traj = md.Trajectory(coords_angstrom / 10.0, self.topology)
+                    temp_traj.save_pdb(str(temp_frame_path))
+                    
+                    # Log to wandb with iteration number
+                    import wandb
+                    wandb.log({
+                        f"trajectory_{run_id}_frame": wandb.Molecule(str(temp_frame_path)),
+                        f"trajectory_{run_id}_iteration": iteration,
+                    })
+                    
+                    # Clean up temp file
+                    temp_frame_path.unlink()
+                except Exception as wandb_err:
+                    logger.debug(f"Could not stream frame to wandb: {wandb_err}")
             
         except Exception as e:
             logger.error(f"Failed to write trajectory frame: {e}")
