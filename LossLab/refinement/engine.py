@@ -127,14 +127,12 @@ class RefinementEngine:
         if pdb_template is not None and (
             config.save_best_pdb or config.save_trajectory_pdb
         ):
-            # ADD THIS LOGGING
             logger.info(f"Initializing TrajectoryWriter with template: {pdb_template}")
             logger.info(f"  Type: {type(pdb_template)}")
             logger.info(f"  save_best_pdb: {config.save_best_pdb}")
             logger.info(f"  save_trajectory_pdb: {config.save_trajectory_pdb}")
 
             # TrajectoryWriter will create its own PDBParser from the template file
-            # This ensures it gets ALL atoms, not filtered versions
             self.trajectory_writer = TrajectoryWriter(
                 output_dir=self.output_dir,
                 pdb_template_path=pdb_template,
@@ -160,14 +158,13 @@ class RefinementEngine:
         else:
             self.wandb_logger = None
 
-        # Initialize trajectory writer AFTER wandb logger for real-time streaming
+        # Initialize trajectory writer after wandb logger for real-time streaming
         if config.save_trajectory_pdb and pdb_template is not None:
             logger.info(
                 "Initializing TrajectoryWriter with real-time wandb streaming..."
             )
 
             # TrajectoryWriter will create its own PDBParser from the template file
-            # This ensures it gets ALL atoms, not filtered versions
             self.trajectory_writer = TrajectoryWriter(
                 output_dir=self.output_dir,
                 pdb_template_path=pdb_template,

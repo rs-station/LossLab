@@ -221,7 +221,7 @@ class TrajectoryWriter:
 
             # Save to PDB
             traj.save_pdb(str(best_path))
-            logger.info(f"✓ Saved best structure to {best_path}")
+            logger.info(f"Saved best structure to {best_path}")
 
         except Exception as e:
             logger.error(f"Failed to save best PDB: {e}")
