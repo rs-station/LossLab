@@ -206,16 +206,45 @@ class WandbLogger:
             return
         
         try:
+            import mdtraj as md
+            
             logger.info(f"Logging 3D trajectory from {trajectory_path}")
             
-            # For multi-model PDB, wandb.Molecule can handle it directly
-            # Just pass the file path
-            molecule = wandb.Molecule(str(trajectory_path))
+            # Load trajectory to split into individual frames
+            traj = md.load(str(trajectory_path))
+            n_frames = min(traj.n_frames, max_frames)
             
-            # Log as a single multi-model structure
-            wandb.log({"trajectory_3d": molecule})
+            logger.info(f"Creating wandb table with {n_frames} frames...")
             
-            logger.info(f"✓ Logged 3D trajectory: {trajectory_path.name}")
+            # Create a table with one molecule per row
+            columns = ["iteration", "structure"]
+            table_data = []
+            temp_files = []
+            
+            for i in range(n_frames):
+                # Extract single frame and save to temp file
+                temp_pdb = trajectory_path.parent / f"_temp_frame_{i}.pdb"
+                traj[i].save_pdb(str(temp_pdb))
+                temp_files.append(temp_pdb)
+                
+                # Create wandb.Molecule for this frame
+                molecule = wandb.Molecule(str(temp_pdb))
+                table_data.append([i, molecule])
+            
+            # Log as table (this creates the animation slider in wandb)
+            table = wandb.Table(columns=columns, data=table_data)
+            wandb.log({f"trajectory_3d_{trajectory_path.stem}": table})
+            
+            # Clean up temp files after logging
+            for temp_pdb in temp_files:
+                try:
+                    temp_pdb.unlink()
+                except Exception:
+                    pass
+            
+            logger.info(f"✓ Logged 3D trajectory with {n_frames} frames: {trajectory_path.name}")
+        except ImportError:
+            logger.warning("mdtraj not available, cannot split trajectory into frames")
         except Exception as e:
             logger.warning(f"Failed to log 3D trajectory {trajectory_path}: {e}")
             logger.exception(e)

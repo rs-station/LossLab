@@ -99,7 +99,7 @@ def main():
         
         def __call__(self):
             # Add small random noise
-            noisy_coords = self.coords #+ torch.randn_like(self.coords) * 0.01
+            noisy_coords = self.coords + torch.randn_like(self.coords) * 0.1
             # Return [N, 4]: xyz + confidence
             confidence = torch.ones(len(noisy_coords), device=self.coords.device) * 0.9
             return torch.cat([noisy_coords, confidence.unsqueeze(-1)], dim=-1)

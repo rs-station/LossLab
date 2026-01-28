@@ -236,6 +236,11 @@ class RefinementEngine:
         # Save final best
         self._save_final_best(save_pdb_callback)
         
+        # Close trajectory writers BEFORE logging to wandb
+        if self.trajectory_writer is not None:
+            logger.info("Closing trajectory writers...")
+            self.trajectory_writer.close()
+        
         # Finish wandb run
         if self.wandb_logger is not None:
             logger.info("Logging final results to W&B...")
@@ -268,11 +273,6 @@ class RefinementEngine:
             self.wandb_logger.log_config_file(self.output_dir / "config.yaml")
             logger.info("Finishing W&B run...")
             self.wandb_logger.finish()
-        
-        # Close trajectory writers
-        if self.trajectory_writer is not None:
-            logger.info("Closing trajectory writers...")
-            self.trajectory_writer.close()
 
         return self.global_best_state
 
