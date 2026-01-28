@@ -273,17 +273,12 @@ class RefinementEngine:
                         caption=f"Best Model (Loss: {self.global_best_loss:.4f})"
                     )
             
-            # Log trajectory files for all runs
+            # Log final trajectory animation for interactive playback
             if self.config.save_trajectory_pdb:
                 trajectory_dir = self.output_dir / "trajectory"
-                logger.info(f"Looking for trajectories in: {trajectory_dir}")
                 if trajectory_dir.exists():
-                    traj_files = list(trajectory_dir.glob("*_trajectory.pdb"))
-                    logger.info(f"Found {len(traj_files)} trajectory files: {[f.name for f in traj_files]}")
-                    for traj_file in traj_files:
-                        self.wandb_logger.log_pdb(traj_file, f"trajectory_{traj_file.stem}")
-                        # Log trajectory as 3D table
-                        logger.info(f"Logging trajectory 3D table: {traj_file.name}")
+                    for traj_file in trajectory_dir.glob("*_refinement_trajectory.pdb"):
+                        logger.info(f"Creating trajectory animation: {traj_file.name}")
                         self.wandb_logger.log_trajectory_3d(traj_file, max_frames=50)
             
             self.wandb_logger.log_config_file(self.output_dir / "config.yaml")

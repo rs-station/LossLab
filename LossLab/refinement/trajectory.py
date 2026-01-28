@@ -50,7 +50,6 @@ class TrajectoryWriter:
         self.traj_writers = {}
         self.mdtraj_template = None
         self.topology = None
-        self.frame_count = {}  # Track frame count per run_id for real-time logging
         
         logger.info(f"TrajectoryWriter initialization:")
         logger.info(f"  MDTRAJ_AVAILABLE: {MDTRAJ_AVAILABLE}")
@@ -138,26 +137,25 @@ class TrajectoryWriter:
             logger.debug(f"✓ Saved frame for run {run_id}, iteration {iteration}")
             
             # Real-time wandb logging
-            if self.wandb_logger is not None:
-                self.frame_count[run_id] = self.frame_count.get(run_id, 0) + 1
-                # Log the frame as a 3D molecule to wandb
+            if self.wandb_logger is not None and MDTRAJ_AVAILABLE:
                 try:
+                    # Create temp single-frame PDB for wandb
                     temp_frame_path = self.output_dir / f"_temp_{run_id}_frame.pdb"
-                    # Save single frame temporarily
-                    coords_angstrom = coordinates.reshape(1, -1, 3)
-                    temp_traj = md.Trajectory(coords_angstrom / 10.0, self.topology)
+                    coords_nm = coordinates.reshape(1, -1, 3) / 10.0  # mdtraj uses nm internally
+                    temp_traj = md.Trajectory(coords_nm, self.topology)
                     temp_traj.save_pdb(str(temp_frame_path))
                     
-                    # Log to wandb with iteration number
+                    # Log to wandb
                     import wandb
                     wandb.log({
-                        f"trajectory_{run_id}_frame": wandb.Molecule(str(temp_frame_path)),
-                        f"trajectory_{run_id}_iteration": iteration,
+                        f"trajectory_{run_id}_live": wandb.Molecule(str(temp_frame_path)),
+                        "iteration": iteration,
                     })
                     
-                    # Clean up temp file
+                    # Clean up
                     temp_frame_path.unlink()
                 except Exception as wandb_err:
+                    logger.debug(f"Could not stream frame to wandb: {wandb_err}")
                     logger.debug(f"Could not stream frame to wandb: {wandb_err}")
             
         except Exception as e:

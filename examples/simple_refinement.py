@@ -61,7 +61,7 @@ def main():
 
     # Configure refinement
     config = RefinementConfig(
-        num_iterations=10,
+        num_iterations=3,
         num_runs=1,
         learning_rate_additive=1e-3,
         learning_rate_multiplicative=1e-3,
