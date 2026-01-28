@@ -187,7 +187,7 @@ class WandbLogger:
     def log_trajectory_3d(
         self,
         trajectory_path: str | Path,
-        max_frames: int = 50,
+        max_frames: int = 100,
     ) -> None:
         """Log multi-model PDB trajectory with 3D animated visualization.
         
