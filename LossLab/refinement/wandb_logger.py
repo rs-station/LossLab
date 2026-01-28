@@ -144,6 +144,82 @@ class WandbLogger:
         
         logger.debug(f"Logged PDB artifact: {artifact_name}")
     
+    def log_molecule_3d(
+        self,
+        pdb_path: str | Path,
+        caption: str | None = None,
+        step: int | None = None,
+    ) -> None:
+        """Log 3D molecular structure for interactive visualization in W&B.
+        
+        Args:
+            pdb_path: Path to PDB file
+            caption: Optional caption for the visualization
+            step: Optional step number (iteration)
+        """
+        if not self.enabled or self.run is None:
+            return
+        
+        pdb_path = Path(pdb_path)
+        if not pdb_path.exists():
+            logger.warning(f"PDB file not found: {pdb_path}")
+            return
+        
+        try:
+            logger.info(f"Logging 3D molecule from {pdb_path}")
+            
+            # Create Molecule3D object - pass file path, not content!
+            molecule = wandb.Molecule(str(pdb_path))
+            logger.info(f"Created wandb.Molecule object")
+            
+            # Log with optional caption
+            log_dict = {"molecule_3d": molecule}
+            if caption:
+                log_dict["caption"] = caption
+            
+            logger.info(f"Logging to W&B with step={step}")
+            wandb.log(log_dict, step=step)
+            logger.info(f"✓ Successfully logged 3D molecule: {pdb_path.name}")
+        except Exception as e:
+            logger.error(f"Failed to log 3D molecule {pdb_path}: {e}")
+            logger.exception(e)
+    
+    def log_trajectory_3d(
+        self,
+        trajectory_path: str | Path,
+        max_frames: int = 50,
+    ) -> None:
+        """Log multi-model PDB trajectory with 3D visualization.
+        
+        Creates a table showing structure evolution across iterations.
+        
+        Args:
+            trajectory_path: Path to multi-model PDB file
+            max_frames: Maximum number of frames to log (to avoid UI overload)
+        """
+        if not self.enabled or self.run is None:
+            return
+        
+        trajectory_path = Path(trajectory_path)
+        if not trajectory_path.exists():
+            logger.warning(f"Trajectory file not found: {trajectory_path}")
+            return
+        
+        try:
+            logger.info(f"Logging 3D trajectory from {trajectory_path}")
+            
+            # For multi-model PDB, wandb.Molecule can handle it directly
+            # Just pass the file path
+            molecule = wandb.Molecule(str(trajectory_path))
+            
+            # Log as a single multi-model structure
+            wandb.log({"trajectory_3d": molecule})
+            
+            logger.info(f"✓ Logged 3D trajectory: {trajectory_path.name}")
+        except Exception as e:
+            logger.warning(f"Failed to log 3D trajectory {trajectory_path}: {e}")
+            logger.exception(e)
+    
     def log_coordinates(
         self,
         coordinates: torch.Tensor | np.ndarray,

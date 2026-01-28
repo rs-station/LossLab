@@ -131,6 +131,8 @@ class RefinementEngine:
             logger.info(f"  save_best_pdb: {config.save_best_pdb}")
             logger.info(f"  save_trajectory_pdb: {config.save_trajectory_pdb}")
             
+            # TrajectoryWriter will create its own PDBParser from the template file
+            # This ensures it gets ALL atoms, not filtered versions
             self.trajectory_writer = TrajectoryWriter(
                 output_dir=self.output_dir,
                 pdb_template_path=pdb_template,
@@ -236,21 +238,41 @@ class RefinementEngine:
         
         # Finish wandb run
         if self.wandb_logger is not None:
+            logger.info("Logging final results to W&B...")
             # Log final best artifacts
             if self.config.save_best_pdb:
                 best_pdb_path = self.output_dir / "trajectory" / "best.pdb"
+                logger.info(f"Checking for best PDB: {best_pdb_path}, exists: {best_pdb_path.exists()}")
                 if best_pdb_path.exists():
                     self.wandb_logger.log_pdb(best_pdb_path, "best_model")
+                    # Log as interactive 3D structure
+                    logger.info("Logging final best as 3D molecule...")
+                    self.wandb_logger.log_molecule_3d(
+                        best_pdb_path,
+                        caption=f"Best Model (Loss: {self.global_best_loss:.4f})"
+                    )
             
             # Log trajectory files for all runs
             if self.config.save_trajectory_pdb:
                 trajectory_dir = self.output_dir / "trajectory"
+                logger.info(f"Looking for trajectories in: {trajectory_dir}")
                 if trajectory_dir.exists():
-                    for traj_file in trajectory_dir.glob("*_trajectory.pdb"):
+                    traj_files = list(trajectory_dir.glob("*_trajectory.pdb"))
+                    logger.info(f"Found {len(traj_files)} trajectory files: {[f.name for f in traj_files]}")
+                    for traj_file in traj_files:
                         self.wandb_logger.log_pdb(traj_file, f"trajectory_{traj_file.stem}")
+                        # Log trajectory as 3D table
+                        logger.info(f"Logging trajectory 3D table: {traj_file.name}")
+                        self.wandb_logger.log_trajectory_3d(traj_file, max_frames=50)
             
             self.wandb_logger.log_config_file(self.output_dir / "config.yaml")
+            logger.info("Finishing W&B run...")
             self.wandb_logger.finish()
+        
+        # Close trajectory writers
+        if self.trajectory_writer is not None:
+            logger.info("Closing trajectory writers...")
+            self.trajectory_writer.close()
 
         return self.global_best_state
 
@@ -381,14 +403,13 @@ class RefinementEngine:
                 coordinates=run_best_state["coordinates"],
             )
             
-            # Save best PDB via trajectory writer
-            if self.trajectory_writer is not None and self.config.save_best_pdb:
+            # Save best PDB structure
+            if self.trajectory_writer is not None:
                 self.trajectory_writer.save_best(
                     coordinates=refined_coords,
                     run_id=run_id,
                     iteration=iteration,
                     b_factors=confidence,
-                    loss=loss_value,
                 )
         
         # Save trajectory frame
@@ -521,10 +542,6 @@ class RefinementEngine:
 
         # Save metrics
         metrics.save()
-        
-        # Write trajectory if enabled
-        if self.trajectory_writer is not None:
-            self.trajectory_writer.write_trajectory(f"{run_id}_trajectory.pdb")
 
         # Return results with proper keys
         return {
@@ -543,51 +560,18 @@ class RefinementEngine:
             logger.warning("No best state to save")
             return
         
-        # Save PDB if trajectory writer available
-        if self.trajectory_writer:
-            # Save best PDB
-            best_pdb = self.output_dir / "trajectory" / "best.pdb"
-            if best_pdb.exists():
-                logger.info(f"Saved best PDB to {best_pdb}")
-            
-            # Log to wandb if enabled
-            if self.wandb_logger:
-                # Log best PDB
-                if best_pdb.exists():
+        # Log trajectory files to wandb if enabled
+        if self.wandb_logger:
+            trajectory_dir = self.output_dir / "trajectory"
+            if trajectory_dir.exists():
+                for traj_file in trajectory_dir.glob("*_refinement_trajectory.pdb"):
+                    run_id = traj_file.stem.split("_")[0]  # Extract A, B, C
                     self.wandb_logger.log_artifact(
-                        str(best_pdb),
-                        name="best_model",
-                        artifact_type="model",
+                        str(traj_file),
+                        name=f"trajectory_{run_id}",
+                        artifact_type="trajectory",
                     )
-                
-                # Log all trajectory files
-                trajectory_dir = self.output_dir / "trajectory"
-                if trajectory_dir.exists():
-                    for traj_file in trajectory_dir.glob("*_trajectory.pdb"):
-                        run_id = traj_file.stem.split("_")[0]  # Extract A, B, C
-                        self.wandb_logger.log_artifact(
-                            str(traj_file),
-                            name=f"trajectory_{run_id}",
-                            artifact_type="trajectory",
-                        )
-                        logger.info(f"Logged trajectory to W&B: {traj_file.name}")
-                    
-                    # Also log individual snapshots as a single artifact
-                    snapshot_files = list(trajectory_dir.glob("*_[0-9]*.pdb"))
-                    if snapshot_files:
-                        # Create a zip or log directory
-                        import zipfile
-                        zip_path = self.output_dir / "snapshots.zip"
-                        with zipfile.ZipFile(zip_path, 'w') as zipf:
-                            for snap in snapshot_files:
-                                zipf.write(snap, snap.name)
-                        
-                        self.wandb_logger.log_artifact(
-                            str(zip_path),
-                            name="snapshots",
-                            artifact_type="snapshots",
-                        )
-                        logger.info(f"Logged {len(snapshot_files)} snapshots to W&B")
+                    logger.info(f"Logged trajectory to W&B: {traj_file.name}")
         
         # Save coordinates as tensor
         torch.save(
