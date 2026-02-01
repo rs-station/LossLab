@@ -197,6 +197,7 @@ class RefinementEngine:
         prediction_callback: Callable[[], torch.Tensor],
         optimizer: torch.optim.Optimizer | None = None,
         save_pdb_callback: Callable | None = None,
+        best_state_callback: Callable | None = None,
     ) -> dict[str, Any]:
         """Run complete refinement process.
 
@@ -237,6 +238,7 @@ class RefinementEngine:
                 prediction_callback=prediction_callback,
                 optimizer=optimizer,
                 save_pdb_callback=save_pdb_callback,
+                best_state_callback=best_state_callback,
             )
 
             # Update global best
@@ -389,6 +391,7 @@ class RefinementEngine:
         run_best_state: dict,
         save_pdb_callback: Callable | None,
         confidence: torch.Tensor | None = None,
+        best_state_callback: Callable | None = None,
     ) -> tuple[float, dict]:
         """Update best state and save checkpoints/PDFs.
 
@@ -416,13 +419,7 @@ class RefinementEngine:
                 "coordinates": refined_coords.detach().cpu().clone(),
             }
 
-            # Save checkpoint for new best
-            self.checkpoint_manager.save_checkpoint(
-                iteration=iteration,
-                run_id=run_id,
-                loss=loss_value,
-                coordinates=run_best_state["coordinates"],
-            )
+            # Skip coordinate snapshot checkpoints to avoid .pt files
 
             # Save best PDB structure
             if self.trajectory_writer is not None:
@@ -431,6 +428,13 @@ class RefinementEngine:
                     run_id=run_id,
                     iteration=iteration,
                     b_factors=confidence,
+                )
+
+            if best_state_callback is not None and loss_value < self.global_best_loss:
+                best_state_callback(
+                    run_id=run_id,
+                    iteration=iteration,
+                    loss=loss_value,
                 )
 
         # Save trajectory frame
@@ -460,6 +464,7 @@ class RefinementEngine:
         prediction_callback: Callable[[], torch.Tensor],
         optimizer: torch.optim.Optimizer | None,
         save_pdb_callback: Callable | None,
+        best_state_callback: Callable | None = None,
     ) -> dict[str, Any]:
         """Run single refinement iteration.
 
@@ -548,6 +553,7 @@ class RefinementEngine:
                 run_best_state=run_best_state,
                 save_pdb_callback=save_pdb_callback,
                 confidence=confidence,
+                best_state_callback=best_state_callback,
             )
 
             # Early stopping check
