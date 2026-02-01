@@ -34,7 +34,7 @@ class RefinementConfig:
     device: str = "cuda:0"
 
     # Loss parameters
-    loss_type: Literal["cc", "l2", "sinkhorn"] = "l2"
+    loss_type: Literal["cc", "l2", "sinkhorn", "mse"] = "l2"
     plddt_weight: float = 0.0
     l2_weight: float = 0.0
 
