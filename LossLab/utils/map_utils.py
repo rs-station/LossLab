@@ -5,6 +5,69 @@ import numpy as np
 import torch
 
 
+def parse_pdb_coords(pdb_file: str) -> list[list[float]]:
+    """Extract atomic coordinates from a PDB file."""
+    coords: list[list[float]] = []
+    structure = gemmi.read_structure(pdb_file)
+    for model in structure:
+        for chain in model:
+            for residue in chain:
+                for atom in residue:
+                    coords.append([atom.pos.x, atom.pos.y, atom.pos.z])
+    return coords
+
+
+def create_spherical_mask_for_grid(
+    map_grid: gemmi.FloatGrid,
+    position: np.ndarray,
+    radius: float,
+) -> np.ndarray:
+    """Create spherical boolean mask for a gemmi grid."""
+    temp_mask = map_grid.clone()
+    temp_mask.fill(0)
+    temp_mask.set_points_around(
+        gemmi.Position(position[0], position[1], position[2]),
+        radius=radius,
+        value=1,
+    )
+    temp_mask.symmetrize_max()
+    return np.array(temp_mask, copy=False).astype(bool)
+
+
+def denoise_and_mask_ccp4_map(
+    input_ccp4: gemmi.Ccp4Map,
+    ligand_coords: list[list[float]],
+    high_res_limit: float = 1.8,
+    mask_radius: float = 2.5,
+    tv_denoise: bool = False,
+) -> gemmi.Ccp4Map:
+    """Optionally denoise a CCP4 map and mask ligand regions (in-memory)."""
+    if tv_denoise:
+        from meteor import tv
+        from meteor.rsmap import Map
+
+        rsmap = Map.from_ccp4_map(input_ccp4, high_resolution_limit=high_res_limit)
+        denoised_map, _, _ = tv.tv_denoise_difference_map(rsmap, full_output=True)
+        output_ccp4 = denoised_map.to_ccp4_map(map_sampling=3)
+    else:
+        output_ccp4 = input_ccp4
+
+    grid = output_ccp4.grid
+
+    combined_mask = np.zeros(grid.shape, dtype=bool)
+    for coord in ligand_coords:
+        mask = create_spherical_mask_for_grid(
+            grid,
+            np.array(coord),
+            mask_radius,
+        )
+        combined_mask |= mask
+
+    grid_array = np.array(grid, copy=False)
+    grid_array[combined_mask] = 0
+    return output_ccp4
+
+
 def normalize_map(
     map_grid: torch.Tensor,
     mask: torch.Tensor | None = None,
