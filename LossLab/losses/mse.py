@@ -15,11 +15,13 @@ class MSECoordinatesLoss(BaseLoss):
         reference_coordinates: torch.Tensor,
         device: torch.device | str = "cuda:0",
         reduction: str = "mean",
+        align: bool = True,
     ) -> None:
         super().__init__(device)
         if reduction not in {"mean", "sum"}:
             raise ValueError("reduction must be 'mean' or 'sum'")
         self.reduction = reduction
+        self.align = align
         self.reference_coordinates = reference_coordinates.to(self.device)
 
     def compute(
@@ -32,7 +34,17 @@ class MSECoordinatesLoss(BaseLoss):
             raise ValueError(
                 "coordinates and reference_coordinates must have the same shape"
             )
-        diff = coordinates - self.reference_coordinates
+        if self.align:
+            from LossLab.utils.geometry import kabsch_align
+
+            aligned_coords = kabsch_align(
+                coordinates,
+                self.reference_coordinates,
+            )
+        else:
+            aligned_coords = coordinates
+
+        diff = aligned_coords - self.reference_coordinates
         if self.reduction == "sum":
             loss = torch.sum(diff**2)
         else:
