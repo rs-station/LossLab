@@ -316,7 +316,20 @@ class RefinementEngine:
             Refined coordinates [N, 3]
         """
         # Align to reference
-        aligned_coords = kabsch_align(coordinates, reference_coordinates)
+        indices_moving = getattr(self, "alignment_indices_moving", None)
+        indices_reference = getattr(self, "alignment_indices_reference", None)
+        if indices_moving is None:
+            indices_moving = getattr(self.loss_fn, "alignment_indices_moving", None)
+        if indices_reference is None:
+            indices_reference = getattr(
+                self.loss_fn, "alignment_indices_reference", None
+            )
+        aligned_coords = kabsch_align(
+            coordinates,
+            reference_coordinates,
+            indices_moving=indices_moving,
+            indices_reference=indices_reference,
+        )
 
         # Apply rigid body refinement if enabled
         if self.config.use_rigid_body_refinement and self.rbr_fn is not None:

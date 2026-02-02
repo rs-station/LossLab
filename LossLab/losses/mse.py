@@ -28,6 +28,7 @@ class MSECoordinatesLoss(BaseLoss):
         self.align = align
         self.selection = selection.upper()
 
+        self.reference_cra = None
         if reference_coordinates is None and reference_pdb is not None:
             reference_coordinates = torch.tensor(
                 reference_pdb.atom_pos,
@@ -39,14 +40,22 @@ class MSECoordinatesLoss(BaseLoss):
 
         self.reference_coordinates = reference_coordinates.to(self.device)
 
+        if reference_pdb is not None:
+            self.reference_cra = list(reference_pdb.cra_name)
+
         self.index_moving: np.ndarray | None = None
         self.index_reference: np.ndarray | None = None
         if reference_pdb is not None and moving_pdb is not None:
-            self.index_moving, self.index_reference = self._compute_common_indices(
-                moving_pdb.cra_name,
-                reference_pdb.cra_name,
-                self.selection,
-            )
+            self.set_moving_pdb(moving_pdb)
+
+    def set_moving_pdb(self, moving_pdb) -> None:
+        if self.reference_cra is None:
+            raise ValueError("reference_pdb is required to set moving_pdb")
+        self.index_moving, self.index_reference = self._compute_common_indices(
+            moving_pdb.cra_name,
+            self.reference_cra,
+            self.selection,
+        )
 
     @staticmethod
     def _compute_common_indices(
@@ -63,7 +72,9 @@ class MSECoordinatesLoss(BaseLoss):
             if selection == "CA":
                 return name.endswith("-CA")
             if selection == "BB":
-                return name.endswith("-N") or name.endswith("-CA") or name.endswith("-C")
+                return (
+                    name.endswith("-N") or name.endswith("-CA") or name.endswith("-C")
+                )
             return True
 
         reference_lookup = {
@@ -90,11 +101,12 @@ class MSECoordinatesLoss(BaseLoss):
         structure_factor_calc=None,
         return_metadata: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, dict]:
-        if self.index_moving is None or self.index_reference is None:
-            if coordinates.shape != self.reference_coordinates.shape:
-                raise ValueError(
-                    "coordinates and reference_coordinates must have the same shape"
-                )
+        if (
+            self.index_moving is None or self.index_reference is None
+        ) and coordinates.shape != self.reference_coordinates.shape:
+            raise ValueError(
+                "coordinates and reference_coordinates must have the same shape"
+            )
         if self.align:
             from LossLab.utils.geometry import kabsch_align
 
