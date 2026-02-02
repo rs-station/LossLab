@@ -47,9 +47,6 @@ class RealSpaceLoss(BaseLoss):
         loss_type: Literal["cc", "l2", "sinkhorn", "density_explained"] = "l2",
         mask_center: np.ndarray | None = None,
         mask_radius: float | None = None,
-        penalty_center: np.ndarray | None = None,
-        penalty_radius: float | None = None,
-        penalty_weight: float = 100.0,
     ):
         """Initialize real-space loss.
 
@@ -60,9 +57,6 @@ class RealSpaceLoss(BaseLoss):
             loss_type: Type of loss function to use
             mask_center: Center of spherical mask in orthogonal coordinates
             mask_radius: Radius of spherical mask in Angstroms
-            penalty_center: Center of penalty sphere (atoms to avoid)
-            penalty_radius: Radius of penalty sphere in Angstroms
-            penalty_weight: Weight for spatial penalty term
         """
         super().__init__(device)
 
@@ -96,11 +90,6 @@ class RealSpaceLoss(BaseLoss):
             )
         else:
             self.mask = torch.ones_like(self.target_map_grid, dtype=torch.bool)
-
-        # Penalty parameters
-        self.penalty_center = penalty_center
-        self.penalty_radius = penalty_radius
-        self.penalty_weight = penalty_weight
 
         # Alignment indices (use all atoms by default)
         self.alignment_indices = np.arange(len(pdb_obj.atom_pos))

@@ -546,6 +546,8 @@ class RefinementEngine:
                 wandb_metrics = {
                     f"{run_id}/loss": loss.item(),
                     f"{run_id}/iteration": iteration,
+                    "optimization_loss": loss.item(),
+                    "iteration": iteration,
                 }
                 wandb_metrics.update({f"{run_id}/{k}": v for k, v in metadata.items()})
                 self.wandb_logger.log(wandb_metrics, step=iteration)

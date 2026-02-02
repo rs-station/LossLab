@@ -204,7 +204,7 @@ class TrajectoryWriter:
             return
 
         # Create output path
-        best_path = self.output_dir / f"best_{run_id}_iter{iteration}.pdb"
+        best_path = self.output_dir / f"checkpoint_{run_id}_iter{iteration}.pdb"
 
         try:
             # Convert coordinates to nm (mdtraj uses nm)
@@ -221,7 +221,6 @@ class TrajectoryWriter:
 
             # Save to PDB
             traj.save_pdb(str(best_path))
-            logger.info(f"Saved best structure to {best_path}")
 
         except Exception as e:
             logger.error(f"Failed to save best PDB: {e}")
