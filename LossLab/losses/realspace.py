@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Literal
 
 import gemmi
@@ -63,6 +64,8 @@ class RealSpaceLoss(BaseLoss):
         self.pdb_obj = pdb_obj
         self.loss_type = loss_type
         self.target_ccp4_map = target_map
+        self.mask_center = mask_center
+        self.mask_radius = mask_radius
 
         # Extract map properties
         self.grid_shape = (target_map.grid.nu, target_map.grid.nv, target_map.grid.nw)
@@ -93,6 +96,52 @@ class RealSpaceLoss(BaseLoss):
 
         # Alignment indices (use all atoms by default)
         self.alignment_indices = np.arange(len(pdb_obj.atom_pos))
+        self._residue_ids = self._extract_residue_ids(pdb_obj)
+
+    def set_pdb_obj(self, pdb_obj) -> None:
+        self.pdb_obj = pdb_obj
+        self.alignment_indices = np.arange(len(pdb_obj.atom_pos))
+        self._residue_ids = self._extract_residue_ids(pdb_obj)
+
+    def _extract_residue_ids(self, pdb_obj) -> torch.Tensor | None:
+        cra_name = getattr(pdb_obj, "cra_name", None)
+        if cra_name is None:
+            return None
+        residue_ids = []
+        for name in cra_name:
+            match = re.search(r"-(\d+)-", str(name))
+            if match is None:
+                return None
+            residue_ids.append(int(match.group(1)))
+        return torch.tensor(residue_ids, device=self.device, dtype=torch.long)
+
+    def _apply_residue_gradient_mask(
+        self,
+        coordinates: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.mask_center is None or self.mask_radius is None:
+            return coordinates
+        if self._residue_ids is None:
+            logger.warning("Residue ids unavailable; skipping gradient mask")
+            return coordinates
+        center = torch.as_tensor(
+            self.mask_center,
+            device=coordinates.device,
+            dtype=coordinates.dtype,
+        )
+        dists = torch.norm(coordinates - center, dim=-1)
+        atom_in = dists <= float(self.mask_radius)
+
+        unique_res, inverse = torch.unique(self._residue_ids, return_inverse=True)
+        residue_keep = torch.zeros(
+            unique_res.shape[0], device=coordinates.device, dtype=torch.bool
+        )
+        for idx in range(unique_res.shape[0]):
+            residue_keep[idx] = atom_in[inverse == idx].any()
+
+        atom_keep = residue_keep[inverse].to(coordinates.dtype)
+        keep_mask = atom_keep.unsqueeze(-1)
+        return coordinates * keep_mask + coordinates.detach() * (1 - keep_mask)
 
     @cached_property
     def normalized_target(self) -> torch.Tensor:
@@ -116,7 +165,8 @@ class RealSpaceLoss(BaseLoss):
             Normalized map grid [Dz, Dy, Dx]
         """
         # Calculate structure factors
-        f_protein = structure_factor_calc.calc_fprotein(coordinates, Return=True)
+        masked_coords = self._apply_residue_gradient_mask(coordinates)
+        f_protein = structure_factor_calc.calc_fprotein(masked_coords, Return=True)
 
         # Convert to real space via FFT
         from SFC_Torch.mask import reciprocal_grid
