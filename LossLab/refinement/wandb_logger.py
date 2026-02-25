@@ -383,7 +383,7 @@ class WandbLogger:
         ]
         html_content = "\n".join(html_lines)
 
-        with open(output_html, "w") as f:
+        with open(output_html, "w", encoding="utf-8") as f:
             f.write(html_content)
 
         logger.info(f"Created 3Dmol.js animation HTML: {output_html}")

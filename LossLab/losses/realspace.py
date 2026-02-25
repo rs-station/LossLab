@@ -18,6 +18,7 @@ from LossLab.losses.base import BaseLoss
 from LossLab.utils.decorators import cached_property, gpu_memory_tracked, timed
 from LossLab.utils.map_utils import (
     create_spherical_mask,
+    create_spherical_mask_for_grid,
     gaussian_smooth_3d,
     normalize_map,
 )
@@ -84,12 +85,13 @@ class RealSpaceLoss(BaseLoss):
 
         # Setup mask
         if mask_center is not None and mask_radius is not None:
-            self.mask = create_spherical_mask(
-                self.grid_shape, mask_center, mask_radius, self.voxel_size, self.device
-            )
+            normalized_center = self._normalize_mask_center(mask_center)
+            self.mask_center = normalized_center
+            self.mask = self._build_mask(normalized_center, mask_radius)
             logger.info(
-                f"Created spherical mask: radius={mask_radius}Å, "
-                f"voxels={self.mask.sum().item()}"
+                "Created spherical mask: radius={}Å, voxels={}",
+                mask_radius,
+                int(self.mask.sum().item()),
             )
         else:
             self.mask = torch.ones_like(self.target_map_grid, dtype=torch.bool)
@@ -102,6 +104,85 @@ class RealSpaceLoss(BaseLoss):
         self.pdb_obj = pdb_obj
         self.alignment_indices = np.arange(len(pdb_obj.atom_pos))
         self._residue_ids = self._extract_residue_ids(pdb_obj)
+
+    def set_mask(
+        self,
+        mask_center: np.ndarray | None,
+        mask_radius: float | None,
+    ) -> None:
+        self.mask_center = mask_center
+        self.mask_radius = mask_radius
+        if mask_center is not None and mask_radius is not None:
+            normalized_center = self._normalize_mask_center(mask_center)
+            self.mask_center = normalized_center
+            self.mask = self._build_mask(normalized_center, mask_radius)
+            logger.info(
+                "Updated spherical mask: radius={}Å, voxels={}",
+                mask_radius,
+                int(self.mask.sum().item()),
+            )
+        else:
+            self.mask = torch.ones_like(self.target_map_grid, dtype=torch.bool)
+            logger.info("Updated spherical mask disabled; using full map")
+
+        if hasattr(self, "_cached_normalized_target"):
+            delattr(self, "_cached_normalized_target")
+
+    def _build_mask(
+        self,
+        mask_center: np.ndarray | torch.Tensor,
+        mask_radius: float,
+    ) -> torch.Tensor:
+        center_np = (
+            mask_center.detach().cpu().numpy()
+            if torch.is_tensor(mask_center)
+            else np.asarray(mask_center, dtype=np.float32)
+        )
+        try:
+            mask_np = create_spherical_mask_for_grid(
+                self.target_ccp4_map.grid,
+                center_np,
+                float(mask_radius),
+            )
+            return torch.tensor(mask_np, device=self.device, dtype=torch.bool)
+        except Exception as exc:
+            logger.warning(
+                "Failed grid-based mask; falling back to voxel mask: {}",
+                exc,
+            )
+            mask = create_spherical_mask(
+                self.grid_shape,
+                center_np,
+                float(mask_radius),
+                self.voxel_size,
+                self.device,
+            )
+            return mask
+
+    def _normalize_mask_center(
+        self,
+        mask_center: np.ndarray | torch.Tensor,
+    ) -> np.ndarray:
+        center_np = (
+            mask_center.detach().cpu().numpy()
+            if torch.is_tensor(mask_center)
+            else np.asarray(mask_center, dtype=np.float64)
+        )
+        try:
+            pos = gemmi.Position(
+                float(center_np[0]),
+                float(center_np[1]),
+                float(center_np[2]),
+            )
+            frac = self.unit_cell.fractionalize(pos)
+            frac.x = frac.x % 1.0
+            frac.y = frac.y % 1.0
+            frac.z = frac.z % 1.0
+            ortho = self.unit_cell.orthogonalize(frac)
+            return np.array([ortho.x, ortho.y, ortho.z], dtype=np.float32)
+        except Exception as exc:
+            logger.warning("Failed to normalize mask center; using original: {}", exc)
+            return np.asarray(center_np, dtype=np.float32)
 
     def _extract_residue_ids(self, pdb_obj) -> torch.Tensor | None:
         cra_name = getattr(pdb_obj, "cra_name", None)

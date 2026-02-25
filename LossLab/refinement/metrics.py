@@ -102,8 +102,20 @@ class MetricsTracker:
                 f.write(",".join(values) + "\n")
 
         # Log to console if verbose
+        def _format_metric_value(value):
+            if torch.is_tensor(value):
+                if value.numel() == 1:
+                    value = value.item()
+                else:
+                    value = value.detach().cpu().numpy()
+            if isinstance(value, (int, float, np.floating)):
+                return f"{value:.4f}"
+            return str(value)
+
         log_str = f"Iter {iteration}: "
-        log_str += ", ".join(f"{k}={v:.4f}" for k, v in processed_metrics.items())
+        log_str += ", ".join(
+            f"{k}={_format_metric_value(v)}" for k, v in processed_metrics.items()
+        )
         logger.debug(log_str)
 
     def save(self, filename: str | None = None) -> None:

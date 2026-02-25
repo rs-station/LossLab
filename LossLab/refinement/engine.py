@@ -1,5 +1,6 @@
 """Refinement engine for coordinate optimization."""
 
+import contextlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -390,7 +391,6 @@ class RefinementEngine:
         if not loss.requires_grad:
             logger.warning(f"Iteration {iteration}: Loss has no gradients")
             return
-
         loss.backward()
         optimizer.step()
 
@@ -519,6 +519,10 @@ class RefinementEngine:
             if optimizer is not None:
                 optimizer.zero_grad()
 
+            if torch.cuda.is_available():
+                with contextlib.suppress(Exception):
+                    torch.cuda.reset_peak_memory_stats()
+
             # Process coordinates through pipeline
             prediction = prediction_callback()
             coordinates, confidence = prediction[:, :3], prediction[:, 3]
@@ -530,7 +534,6 @@ class RefinementEngine:
             loss, metadata = self._compute_loss_with_metadata(
                 refined_coords, confidence
             )
-
             # Optimization step
             self._optimize(loss, optimizer, iteration)
 
