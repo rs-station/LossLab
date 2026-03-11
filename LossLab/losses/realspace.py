@@ -247,16 +247,21 @@ class RealSpaceLoss(BaseLoss):
         """
         # Calculate structure factors
         masked_coords = self._apply_residue_gradient_mask(coordinates)
-        f_protein = structure_factor_calc.calc_fprotein(masked_coords, Return=True)
-
+        structure_factor_calc.calc_fprotein(masked_coords, Return=True)
         # Convert to real space via FFT
         from SFC_Torch.mask import reciprocal_grid
+        from SFC_Torch.symmetry import expand_to_p1
 
-        rs_grid = reciprocal_grid(
+        Hp1_array, Fp1_tensor = expand_to_p1(
+            structure_factor_calc.space_group,
             structure_factor_calc.Hasu_array,
-            f_protein,
-            structure_factor_calc.gridsize,
+            structure_factor_calc.Fprotein_asu,
+            dmin_mask=None,
+            unitcell=structure_factor_calc.unit_cell,
+            anomalous=structure_factor_calc.anomalous,
         )
+        rs_grid = reciprocal_grid(Hp1_array, Fp1_tensor, structure_factor_calc.gridsize)
+
         map_grid = torch.real(torch.fft.fftn(rs_grid, dim=(-3, -2, -1)))
 
         # Normalize
