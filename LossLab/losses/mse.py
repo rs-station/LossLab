@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Any
+
 import numpy as np
 import torch
 
 from LossLab.losses.base import BaseLoss
+
+logger = logging.getLogger(__name__)
 
 
 class MSECoordinatesLoss(BaseLoss):
@@ -126,6 +131,58 @@ class MSECoordinatesLoss(BaseLoss):
             reference_coords = self.reference_coordinates
 
         diff = aligned_coords - reference_coords
+        if self.reduction == "sum":
+            loss = torch.sum(diff**2)
+        else:
+            loss = torch.mean(diff**2)
+
+        if return_metadata:
+            rmse = torch.sqrt(torch.mean(diff**2)).item()
+            return loss, {"rmse": rmse}
+        return loss
+
+    def set_matching_indices(
+        self,
+        query_idx: list[int],
+        ref_idx: list[int],
+    ) -> None:
+        """Pre-compute matching atom indices for rollout -> reference mapping.
+
+        Args:
+            query_idx: Indices into the flat atom array of the OF3 prediction.
+            ref_idx: Corresponding indices into ``self.reference_coordinates``.
+        """
+        self._query_idx = query_idx
+        self._ref_idx = ref_idx
+
+    def compute_from_rollout(
+        self,
+        rollout_output: dict,
+        batch: dict,
+        return_metadata: bool = False,
+        **kwargs: Any,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, Any]]:
+        """Compute MSE loss directly from OF3 diffusion rollout output.
+
+        Indexes into ``atom_positions_predicted`` with pre-stored query/ref
+        indices (set via :meth:`set_matching_indices`), Kabsch-aligns, and
+        returns the MSE.
+        """
+        if not hasattr(self, "_query_idx") or self._query_idx is None:
+            raise ValueError(
+                "Call set_matching_indices(query_idx, ref_idx) before "
+                "compute_from_rollout"
+            )
+
+        xl_pred = rollout_output["atom_positions_predicted"]  # [1, 1, N_atom, 3]
+        pred_coords = xl_pred[0, 0, self._query_idx]  # [N_match, 3]
+        ref_coords = self.reference_coordinates[self._ref_idx].to(pred_coords.device)
+
+        if self.align:
+            from LossLab.utils.geometry import kabsch_align
+            pred_coords = kabsch_align(pred_coords, ref_coords)
+
+        diff = pred_coords - ref_coords
         if self.reduction == "sum":
             loss = torch.sum(diff**2)
         else:

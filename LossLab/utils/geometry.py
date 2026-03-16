@@ -13,8 +13,106 @@ def _as_numpy(x):
         return x.detach().cpu().numpy()
     return np.asarray(x)
 
+def old_weighted_kabsch(
+    P,
+    Q,
+    weights: np.ndarray | None = None,
+    *,
+    torch_backend: bool = False,
+):
+    """
+    Weighted Kabsch alignment: find rigid transform (R,t) minimizing
+        sum_i w_i || (P_i - cP) R + cQ - Q_i ||^2
+    with nonnegative weights w_i.
 
-def weighted_kabsch(
+    Returns:
+      R: (3,3)
+      t: (3,)
+      P_aligned: (N,3)
+    """
+    if torch_backend:
+        # ---- torch path ----
+        if not isinstance(P, torch.Tensor):
+            P = torch.as_tensor(P, dtype=torch.float32)
+        if not isinstance(Q, torch.Tensor):
+            Q = torch.as_tensor(Q, dtype=torch.float32, device=P.device)
+
+        dev = P.device
+        n = P.shape[0]
+
+        if weights is None:
+            w = torch.ones(n, device=dev, dtype=torch.float32)
+        else:
+            w = torch.as_tensor(weights, device=dev, dtype=torch.float32)
+
+        wsum = w.sum().clamp_min(1e-8)
+        wn = (w / wsum).view(n, 1)
+
+        cP = (wn * P).sum(dim=0, keepdim=True)
+        cQ = (wn * Q).sum(dim=0, keepdim=True)
+
+        X = P - cP
+        Y = Q - cQ
+
+        # H = X^T W Y
+        H = (X * wn).T @ Y
+
+        ac = (
+            torch.cuda.amp.autocast(enabled=False)
+            if dev.type == "cuda"
+            else contextlib.nullcontext()
+        )
+
+        # SVD + reflection fix in fp32, no_grad
+        with ac, torch.no_grad():
+            H32 = H.to(torch.float32)
+            U, _, Vh = torch.linalg.svd(H32, full_matrices=False)  # Vh = V^T
+            V = Vh.transpose(-1, -2)
+
+            # Kabsch: R = V D U^T, where D corrects improper rotation
+            D = torch.eye(3, device=dev, dtype=torch.float32)
+            if torch.linalg.det(V @ U.transpose(-1, -2)) < 0:
+                D[2, 2] = -1.0
+
+            R = (V @ D @ U.transpose(-1, -2)).to(P.dtype)
+
+        P_aligned = (X @ R) + cQ
+        t = cQ.view(3) - (cP.view(3) @ R)
+        return R, t, P_aligned
+
+    # ---- numpy path ----
+    Pn = _as_numpy(P).astype(np.float64)
+    Qn = _as_numpy(Q).astype(np.float64)
+    n = Pn.shape[0]
+
+    if weights is None:
+        w = np.ones((n,), dtype=np.float64)
+    else:
+        w = np.asarray(weights, dtype=np.float64)
+
+    wsum = max(w.sum(), 1e-8)
+    wn = (w / wsum).reshape(n, 1)
+
+    cP = (wn * Pn).sum(axis=0, keepdims=True)
+    cQ = (wn * Qn).sum(axis=0, keepdims=True)
+
+    X = Pn - cP
+    Y = Qn - cQ
+
+    H = (X * wn).T @ Y
+    U, _, Vt = np.linalg.svd(H, full_matrices=False)  # Vt = V^T
+    V = Vt.T
+
+    D = np.eye(3, dtype=np.float64)
+    if np.linalg.det(V @ U.T) < 0:
+        D[2, 2] = -1.0
+
+    R = V @ D @ U.T
+    P_aligned = (X @ R) + cQ
+    t = cQ.reshape(3) - (cP.reshape(3) @ R)
+    return R, t, P_aligned
+
+def old_weighted_kabsch(
     P,
     Q,
     weights: np.ndarray | None = None,
@@ -73,6 +171,13 @@ def weighted_kabsch(
             R = U @ D @ Vt
 
         P_aligned = (X @ R) + cQ
+        R2 = R.transpose(-1, -2)
+        P2 = (X @ R2) + cQ
+        err1 = torch.mean(torch.sum((P_aligned - Q) ** 2, dim=-1))
+        err2 = torch.mean(torch.sum((P2 - Q) ** 2, dim=-1))
+        if err2 < err1:
+            R = R2
+            P_aligned = P2
         t = cQ.view(3) - (cP.view(3) @ R)
         return R, t, P_aligned
 
@@ -105,6 +210,48 @@ def weighted_kabsch(
     t = cQ.reshape(3) - (cP.reshape(3) @ R)
     return R, t, P_aligned
 
+def weighted_kabsch(P, Q, weights=None, *, torch_backend=False):
+    if torch_backend:
+        if not isinstance(P, torch.Tensor):
+            P = torch.as_tensor(P, dtype=torch.float32)
+        if not isinstance(Q, torch.Tensor):
+            Q = torch.as_tensor(Q, dtype=torch.float32, device=P.device)
+
+        dev = P.device
+        n = P.shape[0]
+
+        if weights is None:
+            w = torch.ones(n, device=dev, dtype=torch.float32)
+        else:
+            w = torch.as_tensor(weights, device=dev, dtype=torch.float32)
+
+        wsum = w.sum().clamp_min(1e-8)
+        wn = (w / wsum).view(n, 1)
+
+        cP = (wn * P).sum(dim=0, keepdim=True)
+        cQ = (wn * Q).sum(dim=0, keepdim=True)
+
+        X = P - cP
+        Y = Q - cQ
+
+        H = (X * wn).T @ Y  # X^T W Y
+
+        # SVD in float32, but keep it deterministic/robust
+        H32 = H.to(torch.float32)
+        U, _, Vh = torch.linalg.svd(H32, full_matrices=False)  # Vh is V^T
+
+        # Correct Kabsch assembly: R = V D U^T
+        V = Vh.transpose(-1, -2)
+        det = torch.linalg.det(V @ U.transpose(-1, -2))
+        D = torch.eye(3, device=dev, dtype=torch.float32)
+        if det < 0:
+            D[2, 2] = -1.0
+
+        R = (V @ D @ U.transpose(-1, -2)).to(P.dtype)
+
+        P_aligned = (X @ R) + cQ
+        t = cQ.view(3) - (cP.view(3) @ R)
+        return R, t, P_aligned
 
 def kabsch_alignment(P, Q, *, torch_backend: bool = False):
     """Convenience wrapper performing a uniform-weight Kabsch alignment."""
