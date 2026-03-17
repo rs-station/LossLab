@@ -3,5 +3,6 @@
 from LossLab.losses.base import BaseLoss
 from LossLab.losses.mse import MSECoordinatesLoss
 from LossLab.losses.realspace import RealSpaceLoss
+from LossLab.losses.saxs import DebyeLoss, DebyeRawLoss
 
-__all__ = ["RealSpaceLoss", "MSECoordinatesLoss", "BaseLoss"]
+__all__ = ["RealSpaceLoss", "MSECoordinatesLoss", "BaseLoss", "DebyeRawLoss", "DebyeLoss"]

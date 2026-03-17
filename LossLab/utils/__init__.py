@@ -6,6 +6,13 @@ from LossLab.utils.decorators import (
     timed,
     validate_shapes,
 )
+from LossLab.utils.form_factors import (
+    EXV_VOLUMES,
+    FORM_FACTOR_COEFFS,
+    N_IMPLICIT_H,
+    compute_form_factors,
+    get_exv_volumes,
+)
 from LossLab.utils.geometry import compute_rmsd, kabsch_align
 from LossLab.utils.map_utils import apply_mask, create_spherical_mask, normalize_map
 
@@ -19,4 +26,9 @@ __all__ = [
     "normalize_map",
     "apply_mask",
     "create_spherical_mask",
+    "FORM_FACTOR_COEFFS",
+    "N_IMPLICIT_H",
+    "EXV_VOLUMES",
+    "compute_form_factors",
+    "get_exv_volumes",
 ]
