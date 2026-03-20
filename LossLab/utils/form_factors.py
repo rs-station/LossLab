@@ -117,7 +117,7 @@ def _load_form_factor_coeffs(header_path: str) -> dict[str, dict]:
     return coeffs
 
 
-def _build_coeffs() -> dict[str, dict]:
+def _build_coeffs_from_header() -> dict[str, dict]:
     """Load from header and add pyAUSAXS enum aliases."""
     path = _find_header()
     raw = _load_form_factor_coeffs(path)
@@ -139,8 +139,62 @@ def _build_coeffs() -> dict[str, dict]:
     return raw
 
 
+# Hardcoded fallback coefficients (s-space b values from Waasmaier & Kirfel /
+# Grudinin). These are converted to q-space at the bottom of this block.
+_FALLBACK_COEFFS_S_SPACE: dict[str, dict] = {
+    "H": {"a": [0.489918, 0.262003, 0.196767, 0.049879, 0.0],
+           "b": [20.6593, 7.74039, 49.5519, 2.20159, 0.0], "c": 0.001305},
+    "C": {"a": [2.657506, 1.078079, 1.490909, -4.241070, 0.713791],
+           "b": [14.780758, 0.776775, 42.086843, -0.000294, 0.239535], "c": 4.297983},
+    "N": {"a": [11.893780, 3.277479, 1.858092, 0.858927, 0.912985],
+           "b": [0.000158, 10.232723, 30.344690, 0.656065, 0.217287], "c": -11.804902},
+    "O": {"a": [2.960427, 2.508818, 0.637853, 0.722838, 1.142756],
+           "b": [14.182259, 5.936858, 0.112726, 34.958481, 0.390240], "c": 0.027014},
+    "S": {"a": [6.362157, 5.154568, 1.473732, 1.635073, 1.209372],
+           "b": [1.514347, 22.092528, 0.061373, 55.445176, 0.646925], "c": 0.154722},
+    "CH": {"a": [2.909530, 0.485267, 1.516151, 0.206905, 1.541626],
+            "b": [13.933084, 23.221524, 41.990403, 4.974183, 0.679266], "c": 0.337670},
+    "CH2": {"a": [3.275723, 0.870037, 1.534606, 0.395078, 1.544562],
+             "b": [13.408502, 23.785175, 41.922444, 5.019072, 0.724439], "c": 0.377096},
+    "CH3": {"a": [3.681341, 1.228691, 1.549320, 0.574033, 1.554377],
+             "b": [13.026207, 24.131974, 41.869426, 4.984373, 0.765769], "c": 0.409294},
+    "NH": {"a": [1.650531, 0.429639, 2.144736, 1.851894, 1.408921],
+            "b": [10.603730, 6.987283, 29.939901, 10.573859, 0.611678], "c": 0.510589},
+    "NH2": {"a": [1.904157, 1.942536, 2.435585, 0.730512, 1.379728],
+             "b": [10.803702, 10.792421, 29.610479, 6.847755, 0.709687], "c": 0.603738},
+    "NH3": {"a": [1.882162, 1.933200, 2.465843, 0.927311, 1.190889],
+             "b": [10.975157, 10.956008, 29.208572, 6.663555, 0.843650], "c": 0.597322},
+    "OH": {"a": [0.456221, 3.219608, 0.812773, 2.666928, 1.380927],
+            "b": [21.503498, 13.397134, 34.547137, 5.826620, 0.412902], "c": 0.463202},
+    "SH": {"a": [0.570042, 6.337416, 1.641643, 5.398549, 1.527982],
+            "b": [11.447986, 1.197657, 55.401032, 22.420955, 2.356552], "c": 1.523944},
+    "OTH": {"a": [7.188004, 6.638454, 0.454180, 1.929593, 1.523654],
+             "b": [0.956221, 15.339877, 15.339862, 39.043824, 0.062409], "c": 0.265954},
+}
+
+
+def _build_fallback_coeffs() -> dict[str, dict]:
+    """Convert hardcoded s-space coefficients to q-space."""
+    result = {}
+    for name, entry in _FALLBACK_COEFFS_S_SPACE.items():
+        result[name] = {
+            "a": list(entry["a"]),
+            "b": [v * _S_TO_Q for v in entry["b"]],
+            "c": entry["c"],
+        }
+    return result
+
+
+def _build_coeffs() -> dict[str, dict]:
+    """Try parsing AUSAXS header; fall back to hardcoded tables."""
+    try:
+        return _build_coeffs_from_header()
+    except FileNotFoundError:
+        return _build_fallback_coeffs()
+
+
 # ---------------------------------------------------------------------------
-# Populated at import time by parsing FormFactorTable.h
+# Populated at import time — prefers AUSAXS header, falls back to hardcoded
 # ---------------------------------------------------------------------------
 FORM_FACTOR_COEFFS: dict[str, dict] = _build_coeffs()
 
