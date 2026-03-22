@@ -10,15 +10,6 @@ pyAUSAXS API semantics (from C++ source):
   debye(ExvModel.none) : debye_raw() * exp(-q^2)  [global avg form factor]
   debye(ExvModel.fraser): per-atom FF product tables + Fraser ExV, binned
 
-AUSAXS FFExplicit AX asymmetry (bug/limitation):
-  AUSAXS iterates atom pairs (i,j) with i<j, storing 2×count in
-  p_aa[type_i][type_j].  The factor=2 trick is correct for AA and XX
-  (symmetric products), but the AX cross term uses f_atomic(A)×f_exv(B)
-  which is NOT symmetric.  This means pair (i,j) gets weighted by
-  2×f_atomic(type_i)×f_exv(type_j) instead of the correct
-  [f_atomic(type_i)×f_exv(type_j) + f_atomic(type_j)×f_exv(type_i)].
-  The error vanishes for same-type pairs and scales with molecular diversity.
-
 Tests:
   1. DebyeRawLoss vs debye_exact()       — both exact O(N^2), no FF, no binning
   2. debye_raw() vs debye_exact()        — isolates histogram binning error
