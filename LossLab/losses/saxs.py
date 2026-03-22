@@ -9,6 +9,14 @@ FormFactor::evaluate(q):
     f(q) = (Σ_k a_k * exp(-b_k * q²) + c) * q0
 where b values are stored in q-space (s-space values / (16π²)) and
 q0 is a normalization constant (default 1; or set to effective charge).
+
+AUSAXS AX asymmetry note:
+    AUSAXS FFExplicit iterates atom pairs (i,j) with i<j and stores
+    2×count in p_aa[type_i][type_j].  The AX cross term multiplies by
+    f_atomic(ff1)×f_exv(ff2) which is not symmetric, so each pair gets
+    weighted by 2×f_atomic(type_i)×f_exv(type_j) instead
+    f_atomic(type_i)×f_exv(type_j) + f_atomic(type_j)×f_exv(type_i).
+    Set match_ausaxs=True to replicate this behavior for validation.
 """
 
 from __future__ import annotations
@@ -246,6 +254,9 @@ class DebyeLoss(BaseLoss):
         ff_types: list of N form factor type strings (e.g. ["C", "N", "OH"])
         sigma: (Q,) per-point uncertainties; if None uses uniform weights
         use_exv: if True apply Fraser excluded volume correction (default True)
+        match_ausaxs: if True replicate the AUSAXS AX histogram asymmetry
+            (see module docstring); default False uses the correct symmetric
+            formula
         rho_water: solvent electron density in e/Å³ (default 0.334)
         device: PyTorch device
         scale_invariant: if True, fit a free log-scale offset before computing χ²
@@ -258,6 +269,7 @@ class DebyeLoss(BaseLoss):
         ff_types: list[str],
         sigma: torch.Tensor | np.ndarray | None = None,
         use_exv: bool = True,
+        match_ausaxs: bool = False,
         rho_water: float = 0.334,
         device: torch.device | str = "cuda:0",
         scale_invariant: bool = False,
@@ -271,6 +283,7 @@ class DebyeLoss(BaseLoss):
         )
         self.ff_types = list(ff_types)
         self.use_exv = use_exv
+        self.match_ausaxs = match_ausaxs
         self.rho_water = rho_water
         self.scale_invariant = scale_invariant
 
@@ -283,24 +296,46 @@ class DebyeLoss(BaseLoss):
 
     def _I_pred(self, coordinates: torch.Tensor) -> torch.Tensor:
         coords = coordinates.to(self.device)
+        N = coords.shape[0]
 
         # effective_charge=False for Fraser (raw 5-Gaussian);
         # effective_charge=True for no-ExV mode
         effective_charge = not self.use_exv
         ff = compute_form_factors(self.ff_types, self.q_values, effective_charge)  # (Q, N)
 
-        if self.use_exv:
-            V = self._exv_volumes                                         # (N,)
-            V_23 = V ** (2.0 / 3.0)
-            exv_exp = -V_23[None, :] / (4.0 * math.pi) * (self.q_values[:, None] ** 2)
-            ff_exv = V[None, :] * self.rho_water * torch.exp(exv_exp)    # (Q, N)
-            ff_eff = ff - ff_exv
-        else:
-            ff_eff = ff
+        if not self.use_exv:
+            sinc = _sinc_debye(coords, self.q_values)                    # (Q, N, N)
+            ww = ff[:, :, None] * ff[:, None, :]                         # (Q, N, N)
+            return (ww * sinc).sum(dim=(-2, -1))                         # (Q,)
 
-        sinc = _sinc_debye(coords, self.q_values)                        # (Q, N, N)
-        ww = ff_eff[:, :, None] * ff_eff[:, None, :]                     # (Q, N, N)
-        return (ww * sinc).sum(dim=(-2, -1))                             # (Q,)
+        V = self._exv_volumes                                            # (N,)
+        V_23 = V ** (2.0 / 3.0)
+        exv_exp = -V_23[None, :] / (4.0 * math.pi) * (self.q_values[:, None] ** 2)
+        ff_exv = V[None, :] * self.rho_water * torch.exp(exv_exp)       # (Q, N)
+
+        sinc = _sinc_debye(coords, self.q_values)                       # (Q, N, N)
+
+        if not self.match_ausaxs:
+            # Correct symmetric formula: I = Σ (f-f_exv)_i (f-f_exv)_j sinc
+            ff_eff = ff - ff_exv
+            ww = ff_eff[:, :, None] * ff_eff[:, None, :]                 # (Q, N, N)
+            return (ww * sinc).sum(dim=(-2, -1))                         # (Q,)
+
+        # AUSAXS-matching formula: I = AA - AX_asym + XX
+        # AA and XX use symmetric products (correct).
+        # AX uses the asymmetric product from the i<j histogram ordering.
+        AA = (ff[:, :, None] * ff[:, None, :] * sinc).sum(dim=(-2, -1))
+
+        # XX (symmetric)
+        XX = (ff_exv[:, :, None] * ff_exv[:, None, :] * sinc).sum(dim=(-2, -1))
+
+        # AX (asymmetric): for i<j pairs, weight is 2*f_atom_i*f_exv_j
+        # Equivalent to: 4 * Σ_{i<j} f_atom_i * f_exv_j * sinc_ij
+        triu_mask = torch.triu(torch.ones(N, N, device=self.device, dtype=sinc.dtype), diagonal=1)
+        ax_upper = ff[:, :, None] * ff_exv[:, None, :] * sinc * triu_mask[None, :, :]
+        AX = 4 * ax_upper.sum(dim=(-2, -1))
+
+        return AA - AX + XX
 
     def compute(
         self,
