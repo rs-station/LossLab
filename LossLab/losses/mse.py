@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from LossLab.losses.base import BaseLoss
+from LossLab.utils.sequence import compute_common_indices
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class MSECoordinatesLoss(BaseLoss):
 
         if reference_pdb is not None:
             self.reference_cra = list(reference_pdb.cra_name)
+            self._reference_sequence = getattr(reference_pdb, "sequence", None)
 
         self.index_moving: np.ndarray | None = None
         self.index_reference: np.ndarray | None = None
@@ -56,49 +58,13 @@ class MSECoordinatesLoss(BaseLoss):
     def set_moving_pdb(self, moving_pdb) -> None:
         if self.reference_cra is None:
             raise ValueError("reference_pdb is required to set moving_pdb")
-        self.index_moving, self.index_reference = self._compute_common_indices(
-            moving_pdb.cra_name,
+        self.index_moving, self.index_reference = compute_common_indices(
+            list(moving_pdb.cra_name),
             self.reference_cra,
             self.selection,
+            moving_sequence=getattr(moving_pdb, "sequence", None),
+            reference_sequence=getattr(self, "_reference_sequence", None),
         )
-
-    @staticmethod
-    def _compute_common_indices(
-        moving_cra: list[str],
-        reference_cra: list[str],
-        selection: str,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        if selection not in {"ALL", "CA", "BB"}:
-            raise ValueError("selection must be one of: ALL, CA, BB")
-
-        def _keep(name: str) -> bool:
-            if selection == "ALL":
-                return True
-            if selection == "CA":
-                return name.endswith("-CA")
-            if selection == "BB":
-                return (
-                    name.endswith("-N") or name.endswith("-CA") or name.endswith("-C")
-                )
-            return True
-
-        reference_lookup = {
-            name: idx for idx, name in enumerate(reference_cra) if _keep(name)
-        }
-        index_moving = []
-        index_reference = []
-        for idx, name in enumerate(moving_cra):
-            if not _keep(name):
-                continue
-            ref_idx = reference_lookup.get(name)
-            if ref_idx is not None:
-                index_moving.append(idx)
-                index_reference.append(ref_idx)
-
-        if not index_moving:
-            raise ValueError("No overlapping atoms found between moving and reference")
-
-        return np.array(index_moving), np.array(index_reference)
 
     def compute(
         self,
@@ -180,6 +146,7 @@ class MSECoordinatesLoss(BaseLoss):
 
         if self.align:
             from LossLab.utils.geometry import kabsch_align
+
             pred_coords = kabsch_align(pred_coords, ref_coords)
 
         diff = pred_coords - ref_coords
