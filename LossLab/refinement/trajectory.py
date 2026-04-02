@@ -212,7 +212,20 @@ class TrajectoryWriter:
             if b_factors is not None:
                 if isinstance(b_factors, torch.Tensor):
                     b_factors = b_factors.detach().cpu().numpy()
-                bfactors_arg = np.clip(np.asarray(b_factors), 0.0, 99.99).reshape(1, -1)
+
+                # Convert to numpy, flatten, and validate length matches number of atoms
+                bfactors_np = np.asarray(b_factors, dtype=float).reshape(-1)
+                n_bfactors = bfactors_np.shape[0]
+                if n_bfactors != n_template:
+                    logger.error(
+                        "❌ B-FACTOR LENGTH MISMATCH for best PDB: provided %s "
+                        "values, but template has %s atoms.",
+                        n_bfactors,
+                        n_template,
+                    )
+                    return
+
+                bfactors_arg = np.clip(bfactors_np, 0.0, 99.99).reshape(1, -1)
             traj.save_pdb(str(best_path), bfactors=bfactors_arg)
 
             # Also save as best.pdb (always overwritten so the latest best is available)
