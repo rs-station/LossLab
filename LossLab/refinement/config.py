@@ -78,6 +78,9 @@ class RefinementConfig:
     verbose: bool = True
     log_metrics: bool = True
 
+    # Alignment
+    use_confidence_alignment_weights: bool = False
+
     # Starting parameters
     starting_bias_path: str | Path | None = None
     starting_weights_path: str | Path | None = None

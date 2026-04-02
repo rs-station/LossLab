@@ -2,10 +2,148 @@
 
 from __future__ import annotations
 
+import re
+import warnings
+
 import numpy as np
 import torch
 
 from LossLab.losses.base import BaseLoss
+
+# ---------------------------------------------------------------------------
+# Smith-Waterman helpers (ported from ROCKET refinement_utils.py)
+# ---------------------------------------------------------------------------
+
+
+def _get_identical_indices(
+    aligned_A: str,
+    aligned_B: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return index pairs where the two aligned sequences are identical.
+
+    Given the *gapped* alignment strings produced by Smith-Waterman,
+    walk both in lock-step and collect positions that share the same
+    residue (skipping gap characters ``'-'``).
+
+    >>> _get_identical_indices('EWTUY', 'E-RUY')
+    (array([0, 3, 4]), array([0, 2, 3]))
+    """
+    ind_A: list[int] = []
+    ind_B: list[int] = []
+    ai = bi = 0
+    for a, b in zip(aligned_A, aligned_B, strict=False):
+        if a == "-":
+            bi += 1
+            continue
+        if b == "-":
+            ai += 1
+            continue
+        if a == b:
+            ind_A.append(ai)
+            ind_B.append(bi)
+        ai += 1
+        bi += 1
+    return np.array(ind_A, dtype=int), np.array(ind_B, dtype=int)
+
+
+def _get_pattern_index(
+    str_list: list[str] | np.ndarray,
+    pattern: str,
+) -> int | None:
+    """Return first index whose element matches *pattern*, or ``None``."""
+    for i, s in enumerate(str_list):
+        if re.match(pattern, s):
+            return i
+    return None
+
+
+def _align_sequences_sw(
+    seq_moving: str,
+    seq_reference: str,
+) -> tuple[np.ndarray, np.ndarray, object]:
+    """Smith-Waterman alignment → residue-level index pairs.
+
+    Returns:
+        (common_moving_resids, common_reference_resids, alignment_object)
+        The first two are 0-based residue indices in the *original*
+        (ungapped) sequences that are identical.
+    """
+    import skbio.alignment
+
+    alignment = skbio.alignment.StripedSmithWaterman(seq_reference)(seq_moving)
+    subind_ref = np.arange(alignment.query_begin, alignment.query_end + 1)
+    subind_mov = np.arange(
+        alignment.target_begin,
+        alignment.target_end_optimal + 1,
+    )
+    subsubind_ref, subsubind_mov = _get_identical_indices(
+        alignment.aligned_query_sequence,
+        alignment.aligned_target_sequence,
+    )
+    return subind_mov[subsubind_mov], subind_ref[subsubind_ref], alignment
+
+
+def _print_sw_alignment(alignment, len_moving: int, len_reference: int) -> None:
+    """Pretty-print a Smith-Waterman alignment in blocks of 60."""
+    qseq = alignment.aligned_query_sequence  # reference (query)
+    tseq = alignment.aligned_target_sequence  # moving   (target)
+    q_start = alignment.query_begin  # 0-based in reference
+    t_start = alignment.target_begin  # 0-based in moving
+    score = alignment.optimal_alignment_score
+
+    # Build identity line
+    mid = []
+    n_ident = 0
+    for a, b in zip(qseq, tseq, strict=False):
+        if a == b and a != "-":
+            mid.append("|")
+            n_ident += 1
+        elif a == "-" or b == "-":
+            mid.append(" ")
+        else:
+            mid.append(".")
+    midline = "".join(mid)
+    aln_len = len(qseq)
+
+    header = (
+        f"\n{'=' * 70}\n"
+        f"Smith-Waterman alignment  (score {score})\n"
+        f"  Reference : {len_reference} residues  "
+        f"(aligned region {q_start}..{alignment.query_end})\n"
+        f"  Moving    : {len_moving} residues  "
+        f"(aligned region {t_start}..{alignment.target_end_optimal})\n"
+        f"  Identical : {n_ident}/{aln_len} "
+        f"({n_ident / aln_len * 100:.1f}%)\n"
+        f"{'=' * 70}"
+    )
+    print(header)
+
+    BLOCK = 60
+    qi, ti = q_start, t_start  # running residue counters
+    for start in range(0, aln_len, BLOCK):
+        end = min(start + BLOCK, aln_len)
+        q_chunk = qseq[start:end]
+        t_chunk = tseq[start:end]
+        m_chunk = midline[start:end]
+
+        # Count non-gap residues in this block to advance counters
+        q_nongap = sum(1 for c in q_chunk if c != "-")
+        t_nongap = sum(1 for c in t_chunk if c != "-")
+
+        print(f"  Ref  {qi:>5d}  {q_chunk}  {qi + q_nongap - 1}")
+        print(f"              {m_chunk}")
+        print(f"  Mov  {ti:>5d}  {t_chunk}  {ti + t_nongap - 1}")
+        print()
+
+        qi += q_nongap
+        ti += t_nongap
+
+    print(f"{'=' * 70}\n")
+
+
+# ---------------------------------------------------------------------------
+# MSE loss
+# ---------------------------------------------------------------------------
 
 
 class MSECoordinatesLoss(BaseLoss):
@@ -28,6 +166,7 @@ class MSECoordinatesLoss(BaseLoss):
         self.align = align
         self.selection = selection.upper()
 
+        self._reference_pdb = reference_pdb
         self.reference_cra = None
         if reference_coordinates is None and reference_pdb is not None:
             reference_coordinates = torch.tensor(
@@ -45,55 +184,160 @@ class MSECoordinatesLoss(BaseLoss):
 
         self.index_moving: np.ndarray | None = None
         self.index_reference: np.ndarray | None = None
+        self._alignment_weights: np.ndarray | None = None
         if reference_pdb is not None and moving_pdb is not None:
             self.set_moving_pdb(moving_pdb)
 
+    # ----- public helpers ---------------------------------------------------
+
+    def set_alignment_weights(self, weights: np.ndarray | torch.Tensor | None) -> None:
+        """Set per-atom weights for Kabsch alignment (e.g. derived from
+        pseudo-B factors).  Accepts numpy or torch tensors."""
+        self._alignment_weights = weights
+
     def set_moving_pdb(self, moving_pdb) -> None:
-        if self.reference_cra is None:
+        """Compute atom-level index pairs via Smith-Waterman alignment.
+
+        Uses the ``.sequence`` attribute on both PDB objects to run a
+        Smith-Waterman alignment, then expands the residue-level matches
+        to atom-level indices filtered by *self.selection*.
+        """
+        if self._reference_pdb is None or self.reference_cra is None:
             raise ValueError("reference_pdb is required to set moving_pdb")
+
         self.index_moving, self.index_reference = self._compute_common_indices(
-            moving_pdb.cra_name,
-            self.reference_cra,
+            moving_pdb,
+            self._reference_pdb,
             self.selection,
         )
 
+    # ----- core matching ----------------------------------------------------
+
     @staticmethod
     def _compute_common_indices(
-        moving_cra: list[str],
-        reference_cra: list[str],
+        moving_pdb,
+        reference_pdb,
         selection: str,
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Find overlapping atom indices via Smith-Waterman sequence alignment.
+
+        Steps:
+        1. Align sequences with Smith-Waterman to get residue-level
+           correspondences (handles truncations, insertions, mutations).
+        2. For each aligned residue pair, find the atom-level indices in
+           both CRA lists filtered by *selection* (BB / CA / ALL).
+        3. Report statistics — how many residues & atoms matched / dropped.
+
+        Args:
+            moving_pdb: PDB object with ``.sequence`` and ``.cra_name``
+            reference_pdb: PDB object with ``.sequence`` and ``.cra_name``
+            selection: ``"BB"`` | ``"CA"`` | ``"ALL"``
+
+        Returns:
+            ``(index_moving, index_reference)`` — parallel integer arrays
+            of atom indices into the respective ``cra_name`` lists.
+        """
         if selection not in {"ALL", "CA", "BB"}:
             raise ValueError("selection must be one of: ALL, CA, BB")
 
-        def _keep(name: str) -> bool:
-            if selection == "ALL":
-                return True
-            if selection == "CA":
-                return name.endswith("-CA")
-            if selection == "BB":
-                return (
-                    name.endswith("-N") or name.endswith("-CA") or name.endswith("-C")
-                )
-            return True
+        seq_mov = moving_pdb.sequence
+        seq_ref = reference_pdb.sequence
+        cra_mov = list(moving_pdb.cra_name)
+        cra_ref = list(reference_pdb.cra_name)
 
-        reference_lookup = {
-            name: idx for idx, name in enumerate(reference_cra) if _keep(name)
-        }
-        index_moving = []
-        index_reference = []
-        for idx, name in enumerate(moving_cra):
-            if not _keep(name):
-                continue
-            ref_idx = reference_lookup.get(name)
-            if ref_idx is not None:
-                index_moving.append(idx)
-                index_reference.append(ref_idx)
+        # 1. Sequence alignment ⟹ residue-level index pairs
+        common_mov_resids, common_ref_resids, aln = _align_sequences_sw(
+            seq_mov,
+            seq_ref,
+        )
+        n_aligned_residues = len(common_mov_resids)
+
+        # ---- pretty-print the gapped alignment ----
+        _print_sw_alignment(aln, len(seq_mov), len(seq_ref))
+
+        if n_aligned_residues == 0:
+            raise ValueError(
+                "Smith-Waterman alignment found zero identical residues "
+                f"between moving (len={len(seq_mov)}) and reference "
+                f"(len={len(seq_ref)}) sequences."
+            )
+
+        # 2. Decide which atom types to keep per residue
+        if selection == "CA":
+            atom_suffixes = ["CA"]
+        elif selection == "BB":
+            atom_suffixes = ["N", "CA", "C"]
+        else:  # ALL
+            atom_suffixes = None  # keep every atom in matched residues
+
+        # 3. Expand to atom-level indices
+        index_moving: list[int] = []
+        index_reference: list[int] = []
+        n_atoms_missing = 0
+
+        for res_m, res_r in zip(common_mov_resids, common_ref_resids, strict=True):
+            if atom_suffixes is not None:
+                for atom in atom_suffixes:
+                    im = _get_pattern_index(
+                        cra_mov,
+                        rf".*-{res_m}-.*-{atom}$",
+                    )
+                    ir = _get_pattern_index(
+                        cra_ref,
+                        rf".*-{res_r}-.*-{atom}$",
+                    )
+                    if im is not None and ir is not None:
+                        index_moving.append(im)
+                        index_reference.append(ir)
+                    else:
+                        n_atoms_missing += 1
+            else:
+                # ALL: collect every atom at this residue position that
+                # shares the same atom name in both structures.
+                mov_at_res = {
+                    cra_mov[i].split("-")[-1]: i
+                    for i, name in enumerate(cra_mov)
+                    if re.match(rf".*-{res_m}-.*", name)
+                }
+                ref_at_res = {
+                    cra_ref[i].split("-")[-1]: i
+                    for i, name in enumerate(cra_ref)
+                    if re.match(rf".*-{res_r}-.*", name)
+                }
+                common_atoms = set(mov_at_res) & set(ref_at_res)
+                for atom_name in sorted(common_atoms):
+                    index_moving.append(mov_at_res[atom_name])
+                    index_reference.append(ref_at_res[atom_name])
+                n_atoms_missing += len(set(mov_at_res) ^ set(ref_at_res))
 
         if not index_moving:
-            raise ValueError("No overlapping atoms found between moving and reference")
+            raise ValueError(
+                "No overlapping atoms found after Smith-Waterman alignment. "
+                f"Aligned {n_aligned_residues} residues but no {selection} "
+                f"atoms matched in both structures."
+            )
 
-        return np.array(index_moving), np.array(index_reference)
+        n_matched = len(index_moving)
+        total_mov = len(seq_mov)
+        total_ref = len(seq_ref)
+
+        warnings.warn(
+            f"MSECoordinatesLoss SW alignment ({selection}): "
+            f"{n_aligned_residues}/{total_mov} moving residues aligned "
+            f"to {n_aligned_residues}/{total_ref} reference residues → "
+            f"{n_matched} atom pairs matched"
+            + (
+                f" ({n_atoms_missing} atoms missing in one side)"
+                if n_atoms_missing
+                else ""
+            )
+            + ".",
+            stacklevel=3,
+        )
+
+        return np.array(index_moving, dtype=int), np.array(index_reference, dtype=int)
+
+    # ----- loss computation -------------------------------------------------
 
     def compute(
         self,
@@ -108,14 +352,33 @@ class MSECoordinatesLoss(BaseLoss):
                 "coordinates and reference_coordinates must have the same shape"
             )
         if self.align:
-            from LossLab.utils.geometry import kabsch_align
+            from LossLab.utils.geometry import kabsch_align, weighted_kabsch
 
-            aligned_coords = kabsch_align(
-                coordinates,
-                self.reference_coordinates,
-                indices_moving=self.index_moving,
-                indices_reference=self.index_reference,
-            )
+            if self._alignment_weights is not None:
+                P = (
+                    coordinates[self.index_moving]
+                    if self.index_moving is not None
+                    else coordinates
+                )
+                Q = (
+                    self.reference_coordinates[self.index_reference]
+                    if self.index_reference is not None
+                    else self.reference_coordinates
+                )
+                w = (
+                    self._alignment_weights[self.index_moving]
+                    if self.index_moving is not None
+                    else self._alignment_weights
+                )
+                R, t, _ = weighted_kabsch(P, Q, weights=w, torch_backend=True)
+                aligned_coords = coordinates @ R + t
+            else:
+                aligned_coords = kabsch_align(
+                    coordinates,
+                    self.reference_coordinates,
+                    indices_moving=self.index_moving,
+                    indices_reference=self.index_reference,
+                )
         else:
             aligned_coords = coordinates
 

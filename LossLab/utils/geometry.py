@@ -226,8 +226,22 @@ def kabsch_align(
     reference: torch.Tensor,
     indices_moving: np.ndarray | None = None,
     indices_reference: np.ndarray | None = None,
+    weights: np.ndarray | torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Align moving coordinates to reference using iterative Kabsch alignment."""
+    """Align moving coordinates to reference using iterative Kabsch alignment.
+
+    Args:
+        moving: Moving coordinates [N, 3].
+        reference: Reference coordinates [M, 3].
+        indices_moving: Indices into *moving* used for fitting.
+        indices_reference: Indices into *reference* used for fitting.
+        weights: Per-atom alignment weights for ALL moving atoms [N].
+            If *indices_moving* is set the weights are sub-selected to match
+            the fitting subset automatically.
+
+    Returns:
+        Aligned moving coordinates [N, 3].
+    """
     if indices_moving is None and indices_reference is not None:
         indices_moving = indices_reference
     if indices_reference is None and indices_moving is not None:
@@ -243,7 +257,14 @@ def kabsch_align(
             )
         P = moving[indices_moving] if indices_moving is not None else moving
         Q = reference[indices_reference] if indices_reference is not None else reference
-        R, t, _ = iterative_kabsch_alignment(P, Q, torch_backend=True, max_iters=5)
+        w = None
+        if weights is not None:
+            w = weights[indices_moving] if indices_moving is not None else weights
+            if not torch.is_tensor(w):
+                w = torch.as_tensor(w, dtype=torch.float32, device=moving.device)
+        R, t, _ = iterative_kabsch_alignment(
+            P, Q, weights=w, torch_backend=True, max_iters=5
+        )
         return moving @ R + t
 
     moving_np = _as_numpy(moving)
@@ -254,7 +275,13 @@ def kabsch_align(
         if indices_reference is not None
         else reference_np
     )
-    R, t, _ = iterative_kabsch_alignment(Pn, Qn, torch_backend=False, max_iters=5)
+    wn = None
+    if weights is not None:
+        wn = _as_numpy(weights)
+        wn = wn[indices_moving] if indices_moving is not None else wn
+    R, t, _ = iterative_kabsch_alignment(
+        Pn, Qn, weights=wn, torch_backend=False, max_iters=5
+    )
     return moving_np @ R + t
 
 
