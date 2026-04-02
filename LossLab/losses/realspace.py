@@ -420,10 +420,20 @@ class RealSpaceLoss(BaseLoss):
         model_density = torch.clamp(model_map.reshape(-1)[active] - thresh, min=0.0)
         coords = coords_3d.reshape(-1, 3)[active]
 
-        # Normalize to probability distributions
+        # Normalize to probability distributions, guarding against zero-mass maps.
         eps = 1e-12
-        target_density = target_density / (target_density.sum() + eps)
-        model_density = model_density / (model_density.sum() + eps)
+        target_mass = target_density.sum()
+        model_mass = model_density.sum()
+        mass_eps = 1e-6
+        if target_mass <= mass_eps or model_mass <= mass_eps:
+            logger.warning(
+                "RealSpaceLoss Sinkhorn: zero or near-zero mass after thresholding "
+                f"(target_mass={float(target_mass)}, model_mass={float(model_mass)}). "
+                "Returning large loss without running Sinkhorn."
+            )
+            return torch.tensor(1e6, device=self.device, dtype=torch.float32)
+        target_density = target_density / (target_mass + eps)
+        model_density = model_density / (model_mass + eps)
 
         # Compute Sinkhorn divergence over multiple scales.
         # Use the 4-argument API: sinkhorn(α, x, β, y) where α,β are weight
