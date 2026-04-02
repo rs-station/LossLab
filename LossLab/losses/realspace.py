@@ -49,6 +49,8 @@ class RealSpaceLoss(BaseLoss):
         loss_type: Literal["cc", "l2", "sinkhorn", "density_explained"] = "l2",
         mask_center: np.ndarray | None = None,
         mask_radius: float | None = None,
+        sinkhorn_density_threshold: float = 0.0,
+        sinkhorn_blurs: list[float] | None = None,
     ):
         """Initialize real-space loss.
 
@@ -67,6 +69,10 @@ class RealSpaceLoss(BaseLoss):
         self.target_ccp4_map = target_map
         self.mask_center = mask_center
         self.mask_radius = mask_radius
+        self.sinkhorn_density_threshold = sinkhorn_density_threshold
+        self.sinkhorn_blurs = (
+            sinkhorn_blurs if sinkhorn_blurs is not None else [3.0, 2.0, 1.0, 0.5]
+        )
 
         # Extract map properties
         self.grid_shape = (target_map.grid.nu, target_map.grid.nv, target_map.grid.nw)
@@ -375,14 +381,12 @@ class RealSpaceLoss(BaseLoss):
         self,
         coordinates: torch.Tensor,
         sfc,
-        blurs: tuple[float, ...] = (3.0, 2.0, 1.0, 0.5),
     ) -> torch.Tensor:
         """Compute Sinkhorn (optimal transport) loss.
 
         Args:
             coordinates: Atomic coordinates
             sfc: Structure factor calculator
-            blurs: Multiscale blur schedule in Angstroms
 
         Returns:
             Sinkhorn loss value
@@ -402,19 +406,33 @@ class RealSpaceLoss(BaseLoss):
                 device=self.device,
             )
 
-        # Extract and normalize densities
-        target_density = torch.clamp(self.target_map_grid.reshape(-1)[active], min=0.0)
-        model_density = torch.clamp(model_map.reshape(-1)[active], min=0.0)
-        coords = coords_3d[active]
+        # Both maps are z-score normalized within the mask (model_map via
+        # model_to_map; target via normalized_target).  We subtract the
+        # threshold so that sub-threshold voxels get EXACTLY zero weight
+        # (not a uniform floor).  clamp(x - thresh, min=0) gives a sparse,
+        # peak-only distribution; this is critical — clamp(x, min=thresh)
+        # keeps a large background floor that makes both distributions look
+        # nearly identical and collapses OT to 0.
+        thresh = self.sinkhorn_density_threshold
+        target_density = torch.clamp(
+            self.normalized_target.reshape(-1)[active] - thresh, min=0.0
+        )
+        model_density = torch.clamp(model_map.reshape(-1)[active] - thresh, min=0.0)
+        coords = coords_3d.reshape(-1, 3)[active]
 
         # Normalize to probability distributions
         eps = 1e-12
         target_density = target_density / (target_density.sum() + eps)
         model_density = model_density / (model_density.sum() + eps)
 
-        # Compute Sinkhorn divergence over multiple scales
-        total_loss = 0.0
-        for blur in blurs:
+        # Compute Sinkhorn divergence over multiple scales.
+        # Use the 4-argument API: sinkhorn(α, x, β, y) where α,β are weight
+        # vectors [N] and x,y are position tensors [N, 3].  Both distributions
+        # are supported on the same voxel grid (coords), so x == y == coords.
+        # The 2-argument form sinkhorn(x, y) treats inputs as *unweighted*
+        # point clouds, which would incorrectly collapse to OT ≈ 0.
+        total_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
+        for blur in self.sinkhorn_blurs:
             sinkhorn = SamplesLoss(
                 loss="sinkhorn",
                 p=2,
@@ -423,12 +441,14 @@ class RealSpaceLoss(BaseLoss):
                 debias=True,
             )
             loss_val = sinkhorn(
-                target_density.unsqueeze(-1) * coords,
-                model_density.unsqueeze(-1) * coords,
+                target_density.unsqueeze(0),  # (1, N) weights
+                coords.unsqueeze(0),  # (1, N, 3) positions
+                model_density.unsqueeze(0),  # (1, N) weights
+                coords.unsqueeze(0),  # (1, N, 3) positions
             )
-            total_loss += loss_val
+            total_loss = total_loss + loss_val.squeeze()
 
-        return total_loss / len(blurs)
+        return total_loss / len(self.sinkhorn_blurs)
 
     def _compute_rscc_map(
         self,

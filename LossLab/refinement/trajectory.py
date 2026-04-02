@@ -129,10 +129,24 @@ class TrajectoryWriter:
 
         writer = self.traj_writers[run_id]
 
+        # Convert b_factors to numpy if provided; clamp to [0, 100] for mdtraj
+        b_factors_np = None
+        if b_factors is not None:
+            if isinstance(b_factors, torch.Tensor):
+                b_factors_np = b_factors.detach().cpu().numpy()
+            else:
+                b_factors_np = np.asarray(b_factors)
+            b_factors_np = np.clip(b_factors_np, 0.0, 99.99)
+
         # Write frame (PDBTrajectoryFile expects Angstroms, not nm)
         try:
             coords_angstrom = coordinates.reshape(-1, 3)
-            writer.write(coords_angstrom, self.topology, modelIndex=iteration)
+            writer.write(
+                coords_angstrom,
+                self.topology,
+                modelIndex=iteration,
+                bfactors=b_factors_np,
+            )
 
             # Flush to ensure data is written immediately
             if hasattr(writer, "_file") and hasattr(writer._file, "flush"):
@@ -140,32 +154,10 @@ class TrajectoryWriter:
 
             logger.debug(f"✓ Saved frame for run {run_id}, iteration {iteration}")
 
-            # Real-time wandb logging
-            if self.wandb_logger is not None and MDTRAJ_AVAILABLE:
-                try:
-                    # Create temp single-frame PDB for wandb
-                    temp_frame_path = self.output_dir / f"_temp_{run_id}_frame.pdb"
-                    coords_nm = (
-                        coordinates.reshape(1, -1, 3) / 10.0
-                    )  # mdtraj uses nm internally
-                    temp_traj = md.Trajectory(coords_nm, self.topology)
-                    temp_traj.save_pdb(str(temp_frame_path))
-
-                    # Log to wandb
-                    import wandb
-
-                    wandb.log({
-                        f"trajectory_{run_id}_live": wandb.Molecule(
-                            str(temp_frame_path)
-                        ),
-                        "iteration": iteration,
-                    })
-
-                    # Clean up
-                    temp_frame_path.unlink()
-                except Exception as wandb_err:
-                    logger.debug(f"Could not stream frame to wandb: {wandb_err}")
-                    logger.debug(f"Could not stream frame to wandb: {wandb_err}")
+        # NOTE: wandb logging of live frames is handled by the engine
+        # via its own wandb_logger.log() call with a monotonic global step.
+        # A separate wandb.log() here would conflict with the engine's step
+        # counter, so we skip it.
 
         except Exception as e:
             logger.error(f"Failed to write trajectory frame: {e}")
@@ -205,6 +197,7 @@ class TrajectoryWriter:
 
         # Create output path
         best_path = self.output_dir / f"checkpoint_{run_id}_iter{iteration}.pdb"
+        canonical_best = self.output_dir / "best.pdb"
 
         try:
             # Convert coordinates to nm (mdtraj uses nm)
@@ -213,14 +206,20 @@ class TrajectoryWriter:
             # Create a single-frame trajectory
             traj = md.Trajectory(coords_nm, self.topology)
 
-            # Set B-factors if provided
+            # Save to PDB, passing b_factors directly (shape: (n_frames, n_atoms))
+            # Clamp to [0, 100] — mdtraj rejects values outside this range.
+            bfactors_arg = None
             if b_factors is not None:
                 if isinstance(b_factors, torch.Tensor):
                     b_factors = b_factors.detach().cpu().numpy()
-                traj.bfactors = b_factors.reshape(-1, 1)  # Shape: (n_atoms, 1)
+                bfactors_arg = np.clip(np.asarray(b_factors), 0.0, 99.99).reshape(1, -1)
+            traj.save_pdb(str(best_path), bfactors=bfactors_arg)
 
-            # Save to PDB
-            traj.save_pdb(str(best_path))
+            # Also save as best.pdb (always overwritten so the latest best is available)
+            import shutil
+
+            shutil.copy2(str(best_path), str(canonical_best))
+            logger.debug(f"✓ Updated best.pdb → {best_path.name}")
 
         except Exception as e:
             logger.error(f"Failed to save best PDB: {e}")

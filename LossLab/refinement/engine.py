@@ -183,6 +183,7 @@ class RefinementEngine:
         # Global best tracking
         self.global_best_loss = float("inf")
         self.global_best_state = {}
+        self._global_step = 0  # monotonic counter across runs (for wandb)
 
         logger.info("Initialized RefinementEngine")
         logger.info(f"Output directory: {self.output_dir}")
@@ -199,6 +200,7 @@ class RefinementEngine:
         optimizer: torch.optim.Optimizer | None = None,
         save_pdb_callback: Callable | None = None,
         best_state_callback: Callable | None = None,
+        lr_scheduler: Any | None = None,
     ) -> dict[str, Any]:
         """Run complete refinement process.
 
@@ -240,6 +242,7 @@ class RefinementEngine:
                 optimizer=optimizer,
                 save_pdb_callback=save_pdb_callback,
                 best_state_callback=best_state_callback,
+                lr_scheduler=lr_scheduler,
             )
 
             # Update global best
@@ -377,6 +380,7 @@ class RefinementEngine:
         loss: torch.Tensor,
         optimizer: torch.optim.Optimizer | None,
         iteration: int,
+        lr_scheduler: Any | None = None,
     ) -> None:
         """Perform optimization step if optimizer is provided.
 
@@ -384,6 +388,7 @@ class RefinementEngine:
             loss: Loss tensor to backpropagate
             optimizer: Optional optimizer
             iteration: Current iteration number (for logging)
+            lr_scheduler: Optional learning rate scheduler (stepped after optimizer)
         """
         if optimizer is None:
             return
@@ -393,6 +398,8 @@ class RefinementEngine:
             return
         loss.backward()
         optimizer.step()
+        if lr_scheduler is not None:
+            lr_scheduler.step()
 
     def _update_best_and_save(
         self,
@@ -478,6 +485,7 @@ class RefinementEngine:
         optimizer: torch.optim.Optimizer | None,
         save_pdb_callback: Callable | None,
         best_state_callback: Callable | None = None,
+        lr_scheduler: Any | None = None,
     ) -> dict[str, Any]:
         """Run single refinement iteration.
 
@@ -535,7 +543,7 @@ class RefinementEngine:
                 refined_coords, confidence
             )
             # Optimization step
-            self._optimize(loss, optimizer, iteration)
+            self._optimize(loss, optimizer, iteration, lr_scheduler=lr_scheduler)
 
             # Track metrics
             metrics.log(
@@ -544,16 +552,22 @@ class RefinementEngine:
                 **metadata,
             )
 
-            # Log to wandb
+            # Log to wandb (use monotonic global_step across runs)
             if self.wandb_logger is not None:
                 wandb_metrics = {
                     f"{run_id}/loss": loss.item(),
                     f"{run_id}/iteration": iteration,
                     "optimization_loss": loss.item(),
                     "iteration": iteration,
+                    "run_id": run_id,
                 }
+                # Log current learning rate(s)
+                if optimizer is not None:
+                    for pg_idx, pg in enumerate(optimizer.param_groups):
+                        wandb_metrics[f"lr/group_{pg_idx}"] = pg["lr"]
                 wandb_metrics.update({f"{run_id}/{k}": v for k, v in metadata.items()})
-                self.wandb_logger.log(wandb_metrics, step=iteration)
+                self.wandb_logger.log(wandb_metrics, step=self._global_step)
+            self._global_step += 1
 
             # Update progress bar
             progress.set_postfix(

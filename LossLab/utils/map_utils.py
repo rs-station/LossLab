@@ -47,7 +47,7 @@ def denoise_and_mask_ccp4_map(
         from meteor.rsmap import Map
 
         rsmap = Map.from_ccp4_map(input_ccp4, high_resolution_limit=high_res_limit)
-        denoised_map, _, _ = tv.tv_denoise_difference_map(rsmap, full_output=True)
+        denoised_map, _metadata = tv.tv_denoise_difference_map(rsmap, full_output=True)
         output_ccp4 = denoised_map.to_ccp4_map(map_sampling=3)
     else:
         output_ccp4 = input_ccp4
