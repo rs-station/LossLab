@@ -30,6 +30,7 @@ dependencies = [
     "scipy>=1.10.0",
     "tqdm>=4.65.0",
     "pyyaml>=6.0",
+    "biotite>=1.0.0",
 ]
 
 [project.optional-dependencies]

@@ -11,39 +11,8 @@ import torch
 from LossLab.losses.base import BaseLoss
 
 # ---------------------------------------------------------------------------
-# Smith-Waterman helpers (ported from ROCKET refinement_utils.py)
+# Smith-Waterman helpers (using biotite)
 # ---------------------------------------------------------------------------
-
-
-def _get_identical_indices(
-    aligned_A: str,
-    aligned_B: str,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return index pairs where the two aligned sequences are identical.
-
-    Given the *gapped* alignment strings produced by Smith-Waterman,
-    walk both in lock-step and collect positions that share the same
-    residue (skipping gap characters ``'-'``).
-
-    >>> _get_identical_indices('EWTUY', 'E-RUY')
-    (array([0, 3, 4]), array([0, 2, 3]))
-    """
-    ind_A: list[int] = []
-    ind_B: list[int] = []
-    ai = bi = 0
-    for a, b in zip(aligned_A, aligned_B, strict=False):
-        if a == "-":
-            bi += 1
-            continue
-        if b == "-":
-            ai += 1
-            continue
-        if a == b:
-            ind_A.append(ai)
-            ind_B.append(bi)
-        ai += 1
-        bi += 1
-    return np.array(ind_A, dtype=int), np.array(ind_B, dtype=int)
 
 
 def _get_pattern_index(
@@ -63,33 +32,57 @@ def _align_sequences_sw(
 ) -> tuple[np.ndarray, np.ndarray, object]:
     """Smith-Waterman alignment → residue-level index pairs.
 
+    Uses ``biotite.sequence.align.align_optimal`` with ``local=True``
+    (Smith-Waterman algorithm) for local pairwise alignment.
+
     Returns:
         (common_moving_resids, common_reference_resids, alignment_object)
         The first two are 0-based residue indices in the *original*
         (ungapped) sequences that are identical.
     """
-    import skbio.alignment
+    import biotite.sequence as bseq
+    import biotite.sequence.align as balign
 
-    alignment = skbio.alignment.StripedSmithWaterman(seq_reference)(seq_moving)
-    subind_ref = np.arange(alignment.query_begin, alignment.query_end + 1)
-    subind_mov = np.arange(
-        alignment.target_begin,
-        alignment.target_end_optimal + 1,
+    s_ref = bseq.ProteinSequence(seq_reference)
+    s_mov = bseq.ProteinSequence(seq_moving)
+    matrix = balign.SubstitutionMatrix.std_protein_matrix()
+
+    alignments = balign.align_optimal(s_ref, s_mov, matrix, local=True, max_number=1)
+    aln = alignments[0]
+    trace = aln.trace  # (L, 2) array; -1 = gap
+
+    # Extract identical, non-gap residue pairs
+    valid = (trace[:, 0] != -1) & (trace[:, 1] != -1)
+    ref_indices = trace[valid, 0]
+    mov_indices = trace[valid, 1]
+
+    # Keep only positions where the residues are identical
+    code_ref = aln.sequences[0].code
+    code_mov = aln.sequences[1].code
+    identical_mask = code_ref[ref_indices] == code_mov[mov_indices]
+
+    return (
+        mov_indices[identical_mask],
+        ref_indices[identical_mask],
+        aln,
     )
-    subsubind_ref, subsubind_mov = _get_identical_indices(
-        alignment.aligned_query_sequence,
-        alignment.aligned_target_sequence,
-    )
-    return subind_mov[subsubind_mov], subind_ref[subsubind_ref], alignment
 
 
 def _print_sw_alignment(alignment, len_moving: int, len_reference: int) -> None:
-    """Pretty-print a Smith-Waterman alignment in blocks of 60."""
-    qseq = alignment.aligned_query_sequence  # reference (query)
-    tseq = alignment.aligned_target_sequence  # moving   (target)
-    q_start = alignment.query_begin  # 0-based in reference
-    t_start = alignment.target_begin  # 0-based in moving
-    score = alignment.optimal_alignment_score
+    """Pretty-print a biotite alignment in blocks of 60."""
+    gapped = alignment.get_gapped_sequences()
+    qseq = str(gapped[0])  # reference (first sequence)
+    tseq = str(gapped[1])  # moving    (second sequence)
+    score = alignment.score
+    trace = alignment.trace
+
+    # Determine start positions from the trace
+    valid_ref = trace[:, 0] != -1
+    valid_mov = trace[:, 1] != -1
+    q_start = int(trace[valid_ref, 0][0]) if valid_ref.any() else 0
+    t_start = int(trace[valid_mov, 1][0]) if valid_mov.any() else 0
+    q_end = int(trace[valid_ref, 0][-1]) if valid_ref.any() else 0
+    t_end = int(trace[valid_mov, 1][-1]) if valid_mov.any() else 0
 
     # Build identity line
     mid = []
@@ -109,19 +102,19 @@ def _print_sw_alignment(alignment, len_moving: int, len_reference: int) -> None:
         f"\n{'=' * 70}\n"
         f"Smith-Waterman alignment  (score {score})\n"
         f"  Reference : {len_reference} residues  "
-        f"(aligned region {q_start}..{alignment.query_end})\n"
+        f"(aligned region {q_start}..{q_end})\n"
         f"  Moving    : {len_moving} residues  "
-        f"(aligned region {t_start}..{alignment.target_end_optimal})\n"
+        f"(aligned region {t_start}..{t_end})\n"
         f"  Identical : {n_ident}/{aln_len} "
         f"({n_ident / aln_len * 100:.1f}%)\n"
         f"{'=' * 70}"
     )
     print(header)
 
-    BLOCK = 60
+    block = 60
     qi, ti = q_start, t_start  # running residue counters
-    for start in range(0, aln_len, BLOCK):
-        end = min(start + BLOCK, aln_len)
+    for start in range(0, aln_len, block):
+        end = min(start + block, aln_len)
         q_chunk = qseq[start:end]
         t_chunk = tseq[start:end]
         m_chunk = midline[start:end]
