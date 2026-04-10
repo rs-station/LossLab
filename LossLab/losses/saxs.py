@@ -52,6 +52,20 @@ def _sinc_debye(coords: torch.Tensor, q_values: torch.Tensor) -> torch.Tensor:
     )
 
 
+def _sinc_cross(
+    coords_a: torch.Tensor, coords_b: torch.Tensor, q_values: torch.Tensor,
+) -> torch.Tensor:
+    """Compute sinc(q·r_ij) for cross pairs. Returns (Q, Na, Nb)."""
+    diff = coords_a[:, None, :] - coords_b[None, :, :]      # (Na, Nb, 3)
+    dist = torch.sqrt((diff ** 2).sum(dim=-1) + 1e-30)      # (Na, Nb)
+    qr = q_values[:, None, None] * dist[None, :, :]         # (Q, Na, Nb)
+    return torch.where(
+        qr.abs() < 1e-10,
+        torch.ones_like(qr),
+        torch.sin(qr) / (qr + 1e-30),
+    )
+
+
 def debye_intensity(
     coords: torch.Tensor,
     ff_types: list[str],
@@ -86,6 +100,71 @@ def debye_intensity(
     sinc = _sinc_debye(coords, q_values)
     ww = ff[:, :, None] * ff[:, None, :]
     return (ww * sinc).sum(dim=(-2, -1))
+
+
+def debye_hydration_intensity(
+    coords_atom: torch.Tensor,
+    ff_types_atom: list[str],
+    coords_water: torch.Tensor,
+    ff_types_water: list[str],
+    q_values: torch.Tensor,
+    *,
+    cx: torch.Tensor | float = 1.0,
+    cw: torch.Tensor | float = 1.0,
+    rho_water: float = 0.334,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Differentiable Debye intensity with hydration shell.
+
+    Computes:
+        I(q) = I_aa(cx) + 2·cw·I_aw(cx) + cw²·I_ww
+
+    where I_aa uses the Fraser ExV-corrected atom form factors,
+    I_aw is the atom-water cross term, and I_ww is the water self term.
+
+    Args:
+        coords_atom: (Na, 3) protein atom coordinates.
+        ff_types_atom: Na form-factor type strings.
+        coords_water: (Nw, 3) hydration shell coordinates.
+        ff_types_water: Nw form-factor types (typically all "OH").
+        q_values: (Q,) q-values in Å⁻¹.
+        cx: excluded-volume scale factor.
+        cw: hydration shell contrast parameter.
+        rho_water: bulk solvent electron density.
+
+    Returns:
+        I_total: (Q,) total scattering intensity.
+        components: dict with keys "I_aa", "I_aw", "I_ww".
+    """
+    # Atom form factors with ExV correction
+    ff_atom = compute_form_factors(ff_types_atom, q_values, effective_charge=False)
+    vols = get_exv_volumes(ff_types_atom, q_values.device, q_values.dtype)
+    v_23 = vols ** (2.0 / 3.0)
+    exv_exp = -v_23[None, :] / (4.0 * math.pi) * (q_values[:, None] ** 2)
+    ff_exv = vols[None, :] * rho_water * torch.exp(exv_exp)
+    ff_atom_eff = ff_atom - cx * ff_exv                              # (Q, Na)
+
+    # Water form factors (no ExV — shell is excess over bulk)
+    ff_water = compute_form_factors(
+        ff_types_water, q_values, effective_charge=False,
+    )                                                                # (Q, Nw)
+
+    # I_aa: atom-atom
+    sinc_aa = _sinc_debye(coords_atom, q_values)                    # (Q, Na, Na)
+    ww_aa = ff_atom_eff[:, :, None] * ff_atom_eff[:, None, :]
+    I_aa = (ww_aa * sinc_aa).sum(dim=(-2, -1))                      # (Q,)
+
+    # I_aw: atom-water cross term
+    sinc_aw = _sinc_cross(coords_atom, coords_water, q_values)      # (Q, Na, Nw)
+    ww_aw = ff_atom_eff[:, :, None] * ff_water[:, None, :]
+    I_aw = (ww_aw * sinc_aw).sum(dim=(-2, -1))                      # (Q,)
+
+    # I_ww: water-water
+    sinc_ww = _sinc_debye(coords_water, q_values)                   # (Q, Nw, Nw)
+    ww_ww = ff_water[:, :, None] * ff_water[:, None, :]
+    I_ww = (ww_ww * sinc_ww).sum(dim=(-2, -1))                      # (Q,)
+
+    I_total = I_aa + 2 * cw * I_aw + cw ** 2 * I_ww
+    return I_total, {"I_aa": I_aa, "I_aw": I_aw, "I_ww": I_ww}
 
 
 def load_saxs_data(
@@ -369,4 +448,236 @@ class DebyeLoss(BaseLoss):
             self.sigma = self.sigma.to(self.device)
         if self._exv_volumes is not None:
             self._exv_volumes = self._exv_volumes.to(self.device)
+        return self
+
+
+class DebyeHydrationLoss(BaseLoss):
+    """SAXS loss with hydration shell contribution.
+
+    Computes the full three-component Debye intensity:
+
+        I(q) = I_aa(cx) + 2·cw·I_aw(cx) + cw²·I_ww
+
+    Water positions are generated externally (e.g. by pyAUSAXS ``hydrate()``)
+    and can operate in two modes:
+
+    - ``"fixed"``: water coords are constants, no gradient through them.
+      Gradient still flows through I_aa and the atom side of I_aw.
+    - ``"attached"``: each water is anchored to its nearest protein atom
+      via a frozen offset vector.  When atom i moves, its waters move
+      with it, giving additional gradient flow through the water positions.
+
+    Args:
+        q_values: (Q,) scattering vector magnitudes in Å⁻¹
+        I_target: (Q,) target scattering intensities
+        ff_types_atom: list of Na form factor type strings
+        sigma: (Q,) per-point uncertainties; None for uniform weights
+        cx: excluded-volume scale; set ``learn_cx=True`` to optimise
+        cw: hydration shell contrast; set ``learn_cw=True`` to optimise
+        learn_cx: if True, cx becomes a learnable parameter
+        learn_cw: if True, cw becomes a learnable parameter
+        water_mode: ``"fixed"`` or ``"attached"``
+        rho_water: solvent electron density in e/Å³
+        device: PyTorch device
+        scale_invariant: fit a log-scale offset before computing χ²
+    """
+
+    def __init__(
+        self,
+        q_values: torch.Tensor | np.ndarray,
+        I_target: torch.Tensor | np.ndarray,
+        ff_types_atom: list[str],
+        sigma: torch.Tensor | np.ndarray | None = None,
+        cx: float = 1.0,
+        cw: float = 1.0,
+        learn_cx: bool = False,
+        learn_cw: bool = False,
+        water_mode: str = "fixed",
+        rho_water: float = 0.334,
+        device: torch.device | str = "cuda:0",
+        scale_invariant: bool = False,
+    ) -> None:
+        super().__init__(device)
+        self.q_values = torch.as_tensor(q_values, dtype=torch.float64).to(self.device)
+        self.I_target = torch.as_tensor(I_target, dtype=torch.float64).to(self.device)
+        self.sigma = (
+            torch.as_tensor(sigma, dtype=torch.float64).to(self.device)
+            if sigma is not None else None
+        )
+        self.ff_types_atom = list(ff_types_atom)
+        self.rho_water = rho_water
+        self.scale_invariant = scale_invariant
+        self.water_mode = water_mode
+
+        # Learnable or fixed scaling parameters
+        if learn_cx:
+            self.cx = torch.nn.Parameter(
+                torch.tensor(cx, dtype=torch.float64, device=self.device)
+            )
+        else:
+            self.cx = torch.tensor(cx, dtype=torch.float64, device=self.device)
+
+        if learn_cw:
+            self.cw = torch.nn.Parameter(
+                torch.tensor(cw, dtype=torch.float64, device=self.device)
+            )
+        else:
+            self.cw = torch.tensor(cw, dtype=torch.float64, device=self.device)
+
+        # ExV volumes for atoms (precomputed)
+        self._exv_volumes = get_exv_volumes(
+            self.ff_types_atom, self.device, torch.float64
+        )
+
+        # Water state (populated by set_water)
+        self._coords_water: torch.Tensor | None = None
+        self._ff_types_water: list[str] | None = None
+        self._parent_idx: torch.Tensor | None = None
+        self._offsets: torch.Tensor | None = None
+        self._I_ww_cached: torch.Tensor | None = None
+
+    def set_water(
+        self,
+        coords_water: torch.Tensor | np.ndarray,
+        coords_atom_ref: torch.Tensor | np.ndarray | None = None,
+        ff_types_water: list[str] | None = None,
+    ) -> None:
+        """Set hydration shell positions.
+
+        Args:
+            coords_water: (Nw, 3) water coordinates.
+            coords_atom_ref: (Na, 3) atom coords at the time of hydration.
+                Required for ``water_mode="attached"`` to compute offsets.
+            ff_types_water: Nw type strings; defaults to all "OH".
+        """
+        cw_t = torch.as_tensor(coords_water, dtype=torch.float64).to(self.device)
+        Nw = cw_t.shape[0]
+        self._ff_types_water = ff_types_water or (["OH"] * Nw)
+
+        if self.water_mode == "attached":
+            if coords_atom_ref is None:
+                raise ValueError(
+                    "coords_atom_ref is required for water_mode='attached'"
+                )
+            ca_ref = torch.as_tensor(
+                coords_atom_ref, dtype=torch.float64,
+            ).to(self.device)
+            # Assign each water to its nearest atom
+            dists = torch.cdist(cw_t, ca_ref)                       # (Nw, Na)
+            self._parent_idx = dists.argmin(dim=1)                   # (Nw,)
+            self._offsets = cw_t - ca_ref[self._parent_idx]          # (Nw, 3)
+            self._coords_water = None  # derived at forward time
+        else:
+            self._coords_water = cw_t
+            self._parent_idx = None
+            self._offsets = None
+
+        # Invalidate cached I_ww
+        self._I_ww_cached = None
+
+    def _get_water_coords(self, coords_atom: torch.Tensor) -> torch.Tensor:
+        """Return water coords — fixed or derived from atom positions."""
+        if self.water_mode == "attached":
+            return coords_atom[self._parent_idx] + self._offsets
+        return self._coords_water
+
+    def _I_pred(
+        self, coordinates: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        coords_a = coordinates.to(self.device)
+        coords_w = self._get_water_coords(coords_a)
+
+        # Atom effective form factors (with ExV)
+        ff_atom = compute_form_factors(
+            self.ff_types_atom, self.q_values, effective_charge=False,
+        )
+        V = self._exv_volumes
+        V_23 = V ** (2.0 / 3.0)
+        exv_exp = -V_23[None, :] / (4.0 * math.pi) * (self.q_values[:, None] ** 2)
+        ff_exv = V[None, :] * self.rho_water * torch.exp(exv_exp)
+        ff_eff = ff_atom - self.cx * ff_exv                          # (Q, Na)
+
+        # Water form factors (no ExV)
+        ff_w = compute_form_factors(
+            self._ff_types_water, self.q_values, effective_charge=False,
+        )                                                            # (Q, Nw)
+
+        # I_aa
+        sinc_aa = _sinc_debye(coords_a, self.q_values)
+        I_aa = (ff_eff[:, :, None] * ff_eff[:, None, :] * sinc_aa).sum(dim=(-2, -1))
+
+        # I_aw (cross)
+        sinc_aw = _sinc_cross(coords_a, coords_w, self.q_values)
+        I_aw = (ff_eff[:, :, None] * ff_w[:, None, :] * sinc_aw).sum(dim=(-2, -1))
+
+        # I_ww (cache when water is fixed — it's constant)
+        if self.water_mode == "fixed" and self._I_ww_cached is not None:
+            I_ww = self._I_ww_cached
+        else:
+            sinc_ww = _sinc_debye(coords_w, self.q_values)
+            I_ww = (ff_w[:, :, None] * ff_w[:, None, :] * sinc_ww).sum(dim=(-2, -1))
+            if self.water_mode == "fixed":
+                self._I_ww_cached = I_ww.detach()
+
+        I_total = I_aa + 2 * self.cw * I_aw + self.cw ** 2 * I_ww
+        return I_total, {"I_aa": I_aa, "I_aw": I_aw, "I_ww": I_ww}
+
+    def compute(
+        self,
+        coordinates: torch.Tensor,
+        return_metadata: bool = False,
+        **kwargs: Any,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict]:
+        if self._coords_water is None and self._offsets is None:
+            raise RuntimeError("Call set_water() before compute()")
+
+        I_pred, components = self._I_pred(coordinates)
+
+        log_pred = torch.log(I_pred.clamp(min=1e-30))
+        log_tgt = torch.log(self.I_target.clamp(min=1e-30))
+
+        if self.scale_invariant:
+            log_pred = log_pred + (log_tgt - log_pred).mean().detach()
+
+        residuals = log_pred - log_tgt
+        if self.sigma is not None:
+            residuals = residuals / (self.sigma + 1e-30)
+
+        loss = (residuals ** 2).mean()
+
+        if return_metadata:
+            meta = {
+                "chi2_log": loss.item(),
+                "I_aa_frac": (components["I_aa"].abs().sum()
+                              / I_pred.abs().sum()).item(),
+            }
+            return loss, meta
+        return loss
+
+    def parameters(self):
+        """Yield learnable parameters (cx, cw if set to learn)."""
+        if isinstance(self.cx, torch.nn.Parameter):
+            yield self.cx
+        if isinstance(self.cw, torch.nn.Parameter):
+            yield self.cw
+
+    def to(self, device: torch.device | str) -> "DebyeHydrationLoss":
+        super().to(device)
+        self.q_values = self.q_values.to(self.device)
+        self.I_target = self.I_target.to(self.device)
+        if self.sigma is not None:
+            self.sigma = self.sigma.to(self.device)
+        self._exv_volumes = self._exv_volumes.to(self.device)
+        if not isinstance(self.cx, torch.nn.Parameter):
+            self.cx = self.cx.to(self.device)
+        if not isinstance(self.cw, torch.nn.Parameter):
+            self.cw = self.cw.to(self.device)
+        if self._coords_water is not None:
+            self._coords_water = self._coords_water.to(self.device)
+        if self._parent_idx is not None:
+            self._parent_idx = self._parent_idx.to(self.device)
+        if self._offsets is not None:
+            self._offsets = self._offsets.to(self.device)
+        if self._I_ww_cached is not None:
+            self._I_ww_cached = self._I_ww_cached.to(self.device)
         return self
