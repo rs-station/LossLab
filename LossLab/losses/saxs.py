@@ -66,6 +66,71 @@ def _sinc_cross(
     )
 
 
+# ---------------------------------------------------------------------------
+# Q-chunked Debye helpers — avoid materialising the full (Q, N, N) tensor
+# ---------------------------------------------------------------------------
+
+def _debye_self_chunked(
+    coords: torch.Tensor,
+    q_values: torch.Tensor,
+    ff: torch.Tensor,
+    q_chunk_size: int,
+) -> torch.Tensor:
+    """Chunked I(q) = Σ_ij ff_i(q)·ff_j(q)·sinc(q·r_ij). Returns (Q,).
+
+    Iterates over *q* in chunks so peak memory is O(chunk·N²) instead of
+    O(Q·N²).  Uses torch.cat (not in-place assignment) so autograd is safe.
+    """
+    # Pairwise distances — materialised once, shape (N, N)
+    diff = coords.unsqueeze(0) - coords.unsqueeze(1)        # (N, N, 3)
+    dist = torch.sqrt((diff ** 2).sum(dim=-1) + 1e-30)      # (N, N)
+    Q = q_values.shape[0]
+    chunks = []
+    for start in range(0, Q, q_chunk_size):
+        end = min(start + q_chunk_size, Q)
+        q_c = q_values[start:end]                            # (C,)
+        qr = q_c[:, None, None] * dist[None, :, :]          # (C, N, N)
+        sinc = torch.where(
+            qr.abs() < 1e-10,
+            torch.ones_like(qr),
+            torch.sin(qr) / (qr + 1e-30),
+        )
+        ff_c = ff[start:end]                                 # (C, N)
+        ww = ff_c[:, :, None] * ff_c[:, None, :]            # (C, N, N)
+        chunks.append((ww * sinc).sum(dim=(-2, -1)))         # (C,)
+    return torch.cat(chunks, dim=0)
+
+
+def _debye_cross_chunked(
+    coords_a: torch.Tensor,
+    coords_b: torch.Tensor,
+    q_values: torch.Tensor,
+    ff_a: torch.Tensor,
+    ff_b: torch.Tensor,
+    q_chunk_size: int,
+) -> torch.Tensor:
+    """Chunked cross-term I(q) = Σ_ij ff_a_i(q)·ff_b_j(q)·sinc(q·r_ij).
+
+    Uses torch.cat (not in-place assignment) so autograd is safe.
+    """
+    diff = coords_a[:, None, :] - coords_b[None, :, :]      # (Na, Nb, 3)
+    dist = torch.sqrt((diff ** 2).sum(dim=-1) + 1e-30)      # (Na, Nb)
+    Q = q_values.shape[0]
+    chunks = []
+    for start in range(0, Q, q_chunk_size):
+        end = min(start + q_chunk_size, Q)
+        q_c = q_values[start:end]
+        qr = q_c[:, None, None] * dist[None, :, :]          # (C, Na, Nb)
+        sinc = torch.where(
+            qr.abs() < 1e-10,
+            torch.ones_like(qr),
+            torch.sin(qr) / (qr + 1e-30),
+        )
+        ww = ff_a[start:end, :, None] * ff_b[start:end, None, :]
+        chunks.append((ww * sinc).sum(dim=(-2, -1)))         # (C,)
+    return torch.cat(chunks, dim=0)
+
+
 def debye_intensity(
     coords: torch.Tensor,
     ff_types: list[str],
@@ -193,7 +258,10 @@ def load_saxs_data(
             if not line or line.startswith("#"):
                 continue
             parts = line.replace(",", " ").split()
-            rows.append([float(x) for x in parts[:3]])
+            try:
+                rows.append([float(x) for x in parts[:3]])
+            except ValueError:
+                continue
 
     data = np.array(rows)
     q_exp = data[:, 0]
@@ -310,6 +378,73 @@ class DebyeRawLoss(BaseLoss):
         return self
 
 
+# ---------------------------------------------------------------------------
+# Shared chi2 computation helpers
+# ---------------------------------------------------------------------------
+
+def _linear_chi2(
+    I_pred: torch.Tensor,
+    I_target: torch.Tensor,
+    sigma: torch.Tensor | None,
+    detach_scale: bool = False,
+) -> tuple[torch.Tensor, dict]:
+    """Standard SAXS chi2 in linear space with optimal scale factor.
+
+    chi2 = (1/N) Σ_i ((I_exp_i - c * I_calc_i) / σ_i)²
+
+    The optimal scale factor c is computed analytically:
+        c = Σ(I_exp * I_calc / σ²) / Σ(I_calc² / σ²)
+
+    When ``detach_scale=True``, gradients do not flow through c.  This
+    prevents the optimizer from gaming the scale factor — it can only
+    reduce chi2 by making I_calc/c closer to I_exp.  This mirrors
+    standard SAXS refinement practice (CRYSOL, FoXS) where c is re-fitted
+    at each step but not differentiated through.
+    """
+    if sigma is not None:
+        w = 1.0 / (sigma ** 2 + 1e-30)  # inverse variance weights
+    else:
+        w = torch.ones_like(I_target)
+
+    # Optimal scale: c = (I_exp · I_calc · w) / (I_calc² · w)
+    c = (I_target * I_pred * w).sum() / ((I_pred ** 2 * w).sum() + 1e-30)
+
+    if detach_scale:
+        c = c.detach()
+
+    residuals = (I_target - c * I_pred) * torch.sqrt(w)
+    chi2 = (residuals ** 2).mean()
+
+    return chi2, {
+        "chi2": chi2.item(),
+        "scale_factor": c.item(),
+    }
+
+
+def _log_chi2(
+    I_pred: torch.Tensor,
+    I_target: torch.Tensor,
+    sigma: torch.Tensor | None,
+    scale_invariant: bool,
+) -> tuple[torch.Tensor, dict]:
+    """Log-space chi2 (original LossLab metric).
+
+    *sigma* is expected in **log-space** units (σ_log = σ/I).
+    """
+    log_pred = torch.log(I_pred.clamp(min=1e-30))
+    log_tgt = torch.log(I_target.clamp(min=1e-30))
+
+    if scale_invariant:
+        log_pred = log_pred + (log_tgt - log_pred).mean().detach()
+
+    residuals = log_pred - log_tgt
+    if sigma is not None:
+        residuals = residuals / (sigma + 1e-30)
+
+    loss = (residuals ** 2).mean()
+    return loss, {"chi2_log": loss.item()}
+
+
 class DebyeLoss(BaseLoss):
     """SAXS loss using the full Debye equation with q-dependent form factors.
 
@@ -339,6 +474,10 @@ class DebyeLoss(BaseLoss):
         rho_water: solvent electron density in e/Å³ (default 0.334)
         device: PyTorch device
         scale_invariant: if True, fit a free log-scale offset before computing χ²
+        chi2_mode: ``"log"`` (default) for log-space chi2, or ``"linear"``
+            for the standard SAXS chi2 = (1/N) Σ ((I_exp - c·I_calc)/σ)²
+            with analytically-optimal scale factor c.  The ``"linear"`` mode
+            matches pyAUSAXS ``mol.fit()`` and is the accepted SAXS metric.
     """
 
     def __init__(
@@ -352,6 +491,9 @@ class DebyeLoss(BaseLoss):
         rho_water: float = 0.334,
         device: torch.device | str = "cuda:0",
         scale_invariant: bool = False,
+        q_chunk_size: int | None = None,
+        chi2_mode: str = "log",
+        detach_scale: bool = False,
     ) -> None:
         super().__init__(device)
         self.q_values = torch.as_tensor(q_values, dtype=torch.float64).to(self.device)
@@ -365,6 +507,11 @@ class DebyeLoss(BaseLoss):
         self.match_ausaxs = match_ausaxs
         self.rho_water = rho_water
         self.scale_invariant = scale_invariant
+        self.q_chunk_size = q_chunk_size
+        if chi2_mode not in ("log", "linear"):
+            raise ValueError(f"chi2_mode must be 'log' or 'linear', got {chi2_mode!r}")
+        self.chi2_mode = chi2_mode
+        self.detach_scale = detach_scale
 
         if use_exv:
             self._exv_volumes = get_exv_volumes(
@@ -383,6 +530,8 @@ class DebyeLoss(BaseLoss):
         ff = compute_form_factors(self.ff_types, self.q_values, effective_charge)  # (Q, N)
 
         if not self.use_exv:
+            if self.q_chunk_size is not None:
+                return _debye_self_chunked(coords, self.q_values, ff, self.q_chunk_size)
             sinc = _sinc_debye(coords, self.q_values)                    # (Q, N, N)
             ww = ff[:, :, None] * ff[:, None, :]                         # (Q, N, N)
             return (ww * sinc).sum(dim=(-2, -1))                         # (Q,)
@@ -392,17 +541,19 @@ class DebyeLoss(BaseLoss):
         exv_exp = -V_23[None, :] / (4.0 * math.pi) * (self.q_values[:, None] ** 2)
         ff_exv = V[None, :] * self.rho_water * torch.exp(exv_exp)       # (Q, N)
 
-        sinc = _sinc_debye(coords, self.q_values)                       # (Q, N, N)
-
         if not self.match_ausaxs:
             # Correct symmetric formula: I = Σ (f-f_exv)_i (f-f_exv)_j sinc
             ff_eff = ff - ff_exv
+            if self.q_chunk_size is not None:
+                return _debye_self_chunked(coords, self.q_values, ff_eff, self.q_chunk_size)
+            sinc = _sinc_debye(coords, self.q_values)                    # (Q, N, N)
             ww = ff_eff[:, :, None] * ff_eff[:, None, :]                 # (Q, N, N)
             return (ww * sinc).sum(dim=(-2, -1))                         # (Q,)
 
         # AUSAXS-matching formula: I = AA - AX_asym + XX
         # AA and XX use symmetric products (correct).
         # AX uses the asymmetric product from the i<j histogram ordering.
+        sinc = _sinc_debye(coords, self.q_values)                       # (Q, N, N)
         AA = (ff[:, :, None] * ff[:, None, :] * sinc).sum(dim=(-2, -1))
 
         # XX (symmetric)
@@ -423,21 +574,17 @@ class DebyeLoss(BaseLoss):
         **kwargs: Any,
     ) -> torch.Tensor | tuple[torch.Tensor, dict]:
         I_pred = self._I_pred(coordinates)
+        self._last_I_pred = I_pred.detach()
 
-        log_pred = torch.log(I_pred.clamp(min=1e-30))
-        log_tgt  = torch.log(self.I_target.clamp(min=1e-30))
-
-        if self.scale_invariant:
-            log_pred = log_pred + (log_tgt - log_pred).mean().detach()
-
-        residuals = log_pred - log_tgt
-        if self.sigma is not None:
-            residuals = residuals / (self.sigma + 1e-30)
-
-        loss = (residuals ** 2).mean()
+        if self.chi2_mode == "linear":
+            loss, meta = _linear_chi2(I_pred, self.I_target, self.sigma, self.detach_scale)
+        else:
+            loss, meta = _log_chi2(
+                I_pred, self.I_target, self.sigma, self.scale_invariant,
+            )
 
         if return_metadata:
-            return loss, {"chi2_log": loss.item()}
+            return loss, meta
         return loss
 
     def to(self, device: torch.device | str) -> "DebyeLoss":
@@ -480,6 +627,9 @@ class DebyeHydrationLoss(BaseLoss):
         rho_water: solvent electron density in e/Å³
         device: PyTorch device
         scale_invariant: fit a log-scale offset before computing χ²
+        q_chunk_size: if set, iterate over q in chunks of this size to
+            reduce peak GPU memory from O(Q·N²) to O(chunk·N²)
+        chi2_mode: ``"log"`` (default) or ``"linear"`` — see DebyeLoss.
     """
 
     def __init__(
@@ -496,6 +646,9 @@ class DebyeHydrationLoss(BaseLoss):
         rho_water: float = 0.334,
         device: torch.device | str = "cuda:0",
         scale_invariant: bool = False,
+        q_chunk_size: int | None = None,
+        chi2_mode: str = "log",
+        detach_scale: bool = False,
     ) -> None:
         super().__init__(device)
         self.q_values = torch.as_tensor(q_values, dtype=torch.float64).to(self.device)
@@ -508,6 +661,11 @@ class DebyeHydrationLoss(BaseLoss):
         self.rho_water = rho_water
         self.scale_invariant = scale_invariant
         self.water_mode = water_mode
+        self.q_chunk_size = q_chunk_size
+        if chi2_mode not in ("log", "linear"):
+            raise ValueError(f"chi2_mode must be 'log' or 'linear', got {chi2_mode!r}")
+        self.chi2_mode = chi2_mode
+        self.detach_scale = detach_scale
 
         # Learnable or fixed scaling parameters
         if learn_cx:
@@ -602,20 +760,31 @@ class DebyeHydrationLoss(BaseLoss):
             self._ff_types_water, self.q_values, effective_charge=False,
         )                                                            # (Q, Nw)
 
+        chunk = self.q_chunk_size
+
         # I_aa
-        sinc_aa = _sinc_debye(coords_a, self.q_values)
-        I_aa = (ff_eff[:, :, None] * ff_eff[:, None, :] * sinc_aa).sum(dim=(-2, -1))
+        if chunk is not None:
+            I_aa = _debye_self_chunked(coords_a, self.q_values, ff_eff, chunk)
+        else:
+            sinc_aa = _sinc_debye(coords_a, self.q_values)
+            I_aa = (ff_eff[:, :, None] * ff_eff[:, None, :] * sinc_aa).sum(dim=(-2, -1))
 
         # I_aw (cross)
-        sinc_aw = _sinc_cross(coords_a, coords_w, self.q_values)
-        I_aw = (ff_eff[:, :, None] * ff_w[:, None, :] * sinc_aw).sum(dim=(-2, -1))
+        if chunk is not None:
+            I_aw = _debye_cross_chunked(coords_a, coords_w, self.q_values, ff_eff, ff_w, chunk)
+        else:
+            sinc_aw = _sinc_cross(coords_a, coords_w, self.q_values)
+            I_aw = (ff_eff[:, :, None] * ff_w[:, None, :] * sinc_aw).sum(dim=(-2, -1))
 
         # I_ww (cache when water is fixed — it's constant)
         if self.water_mode == "fixed" and self._I_ww_cached is not None:
             I_ww = self._I_ww_cached
         else:
-            sinc_ww = _sinc_debye(coords_w, self.q_values)
-            I_ww = (ff_w[:, :, None] * ff_w[:, None, :] * sinc_ww).sum(dim=(-2, -1))
+            if chunk is not None:
+                I_ww = _debye_self_chunked(coords_w, self.q_values, ff_w, chunk)
+            else:
+                sinc_ww = _sinc_debye(coords_w, self.q_values)
+                I_ww = (ff_w[:, :, None] * ff_w[:, None, :] * sinc_ww).sum(dim=(-2, -1))
             if self.water_mode == "fixed":
                 self._I_ww_cached = I_ww.detach()
 
@@ -632,25 +801,19 @@ class DebyeHydrationLoss(BaseLoss):
             raise RuntimeError("Call set_water() before compute()")
 
         I_pred, components = self._I_pred(coordinates)
+        self._last_I_pred = I_pred.detach()
 
-        log_pred = torch.log(I_pred.clamp(min=1e-30))
-        log_tgt = torch.log(self.I_target.clamp(min=1e-30))
-
-        if self.scale_invariant:
-            log_pred = log_pred + (log_tgt - log_pred).mean().detach()
-
-        residuals = log_pred - log_tgt
-        if self.sigma is not None:
-            residuals = residuals / (self.sigma + 1e-30)
-
-        loss = (residuals ** 2).mean()
+        if self.chi2_mode == "linear":
+            loss, meta = _linear_chi2(I_pred, self.I_target, self.sigma, self.detach_scale)
+        else:
+            loss, meta = _log_chi2(
+                I_pred, self.I_target, self.sigma, self.scale_invariant,
+            )
 
         if return_metadata:
-            meta = {
-                "chi2_log": loss.item(),
-                "I_aa_frac": (components["I_aa"].abs().sum()
-                              / I_pred.abs().sum()).item(),
-            }
+            meta["I_aa_frac"] = (
+                components["I_aa"].abs().sum() / I_pred.abs().sum()
+            ).item()
             return loss, meta
         return loss
 
