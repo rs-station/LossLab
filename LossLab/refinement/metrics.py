@@ -108,7 +108,7 @@ class MetricsTracker:
                     value = value.item()
                 else:
                     value = value.detach().cpu().numpy()
-            if isinstance(value, (int, float, np.floating)):
+            if isinstance(value, int | float | np.floating):
                 return f"{value:.4f}"
             return str(value)
 
