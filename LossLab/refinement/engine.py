@@ -306,12 +306,15 @@ class RefinementEngine:
         self,
         coordinates: torch.Tensor,
         reference_coordinates: torch.Tensor,
+        alignment_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Process coordinates through alignment and optional RBR.
 
         Args:
             coordinates: Raw predicted coordinates [N, 3]
             reference_coordinates: Reference coordinates [N, 3]
+            alignment_weights: Per-atom weights for Kabsch alignment [N].
+                Higher weight → atom contributes more to the fit.
 
         Returns:
             Refined coordinates [N, 3]
@@ -330,6 +333,7 @@ class RefinementEngine:
             reference_coordinates,
             indices_moving=indices_moving,
             indices_reference=indices_reference,
+            weights=alignment_weights,
         )
 
         # Apply rigid body refinement if enabled
@@ -345,6 +349,41 @@ class RefinementEngine:
             return refined_coords
 
         return aligned_coords
+
+    @staticmethod
+    def _confidence_to_alignment_weights(
+        confidence: torch.Tensor,
+    ) -> torch.Tensor:
+        """Convert pseudo-B confidence values to Kabsch alignment weights.
+
+        Uses the Terwilliger-style weighting scheme:
+            w(B) = 1.0                                     if B <= cutoff1
+            w(B) = 1.0 - 0.5*(B - cutoff1)/(cutoff2-c1)   if cutoff1 < B <= cutoff2
+            w(B) = 0.5 * exp(-sqrt(B - cutoff2))           if B > cutoff2
+
+        where cutoff1 = 30th-percentile of B and cutoff2 = 1.5 * cutoff1.
+
+        Pure-torch implementation — stays on GPU, no CPU round-trip.
+
+        Args:
+            confidence: Per-atom pseudo-B factors [N].
+
+        Returns:
+            Alignment weights [N] on the same device.
+        """
+        x = confidence.detach().float()
+        cutoff1 = torch.quantile(x, 0.3)
+        cutoff2 = cutoff1 * 1.5
+        if cutoff2 <= cutoff1:
+            return torch.ones_like(confidence)
+        ones = torch.ones_like(x)
+        a = torch.where(
+            x <= cutoff1,
+            ones,
+            1.0 - 0.5 * (x - cutoff1) / (cutoff2 - cutoff1),
+        )
+        b = 0.5 * torch.exp(-torch.sqrt(torch.where(x <= cutoff2, ones, x - cutoff2)))
+        return torch.where(a >= 0.5, a, b)
 
     def _compute_loss_with_metadata(
         self,
@@ -526,8 +565,29 @@ class RefinementEngine:
             # Process coordinates through pipeline
             prediction = prediction_callback()
             coordinates, confidence = prediction[:, :3], prediction[:, 3]
+
+            # Update SFC B-factors from predicted pseudo-B so the model
+            # map uses per-atom B-factors instead of stale initial values.
+            if (
+                self.config.use_confidence_alignment_weights
+                and self.sfc is not None
+                and hasattr(self.sfc, "atom_b_iso")
+            ):
+                self.sfc.atom_b_iso = confidence.detach().clone()
+
+            # Compute alignment weights from pseudo-B confidence if enabled
+            alignment_weights = None
+            if self.config.use_confidence_alignment_weights:
+                alignment_weights = self._confidence_to_alignment_weights(confidence)
+                # Forward weights to loss function (e.g. MSECoordinatesLoss)
+                # so its internal Kabsch alignment also uses them.
+                if hasattr(self.loss_fn, "set_alignment_weights"):
+                    self.loss_fn.set_alignment_weights(alignment_weights.detach())
+
             refined_coords = self._process_coordinates(
-                coordinates, reference_coordinates
+                coordinates,
+                reference_coordinates,
+                alignment_weights=alignment_weights,
             )
 
             # Compute loss with metadata
