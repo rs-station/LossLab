@@ -60,6 +60,9 @@ where = ["."]
 exclude = ["test*"]
 
 # --- Ruff Linting Configuration ---
+[tool.mypy]
+ignore_missing_imports = true
+
 [tool.ruff]
 target-version = "py310"
 line-length = 88
