@@ -28,5 +28,5 @@ jobs:
     - name: mypy
       run: |
         pip install mypy
-        pip install '.[tests]'
+        pip install '.[CI]'
         mypy --install-types --non-interactive LossLab/ test/
