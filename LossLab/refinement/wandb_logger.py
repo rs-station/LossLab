@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import torch
@@ -16,7 +16,7 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
-    wandb = None
+    wandb = None  # type: ignore[assignment]
 
 
 class WandbLogger:
@@ -46,7 +46,7 @@ class WandbLogger:
 
     def __init__(
         self,
-        project: str,
+        project: str | None = None,
         entity: str | None = None,
         name: str | None = None,
         config: dict | Any | None = None,
@@ -93,7 +93,8 @@ class WandbLogger:
             notes=notes,
         )
 
-        logger.info(f"W&B run initialized: {self.run.url}")
+        if self.run is not None:
+            logger.info(f"W&B run initialized: {self.run.url}")
 
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
         """Log metrics to wandb.
@@ -171,7 +172,7 @@ class WandbLogger:
             logger.info("Created wandb.Molecule object")
 
             # Log with optional caption
-            log_dict = {"molecule_3d": molecule}
+            log_dict: dict[str, Any] = {"molecule_3d": molecule}
             if caption:
                 log_dict["caption"] = caption
 
@@ -432,7 +433,7 @@ class WandbLogger:
     def watch_model(
         self,
         model: torch.nn.Module,
-        log: str = "gradients",
+        log: Literal["gradients", "parameters", "all"] = "gradients",
         log_freq: int = 100,
     ) -> None:
         """Watch model for gradient/parameter tracking.

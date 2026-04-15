@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import torch
 
@@ -98,8 +100,9 @@ class MSECoordinatesLoss(BaseLoss):
     def compute(
         self,
         coordinates: torch.Tensor,
-        structure_factor_calc=None,
+        structure_factor_calc: Any = None,
         return_metadata: bool = False,
+        **kwargs: Any,
     ) -> torch.Tensor | tuple[torch.Tensor, dict]:
         if (
             self.index_moving is None or self.index_reference is None

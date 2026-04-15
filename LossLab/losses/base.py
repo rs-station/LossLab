@@ -23,12 +23,16 @@ class BaseLoss(ABC):
     def compute(
         self,
         coordinates: torch.Tensor,
+        structure_factor_calc: Any = None,
+        return_metadata: bool = False,
         **kwargs: Any,
     ) -> torch.Tensor | tuple[torch.Tensor, dict]:
         """Compute loss value.
 
         Args:
             coordinates: Atomic coordinates [N, 3]
+            structure_factor_calc: Optional structure factor calculator
+            return_metadata: Whether to return additional metadata
             **kwargs: Additional loss-specific arguments
 
         Returns:
@@ -39,18 +43,27 @@ class BaseLoss(ABC):
     def __call__(
         self,
         coordinates: torch.Tensor,
+        structure_factor_calc: Any = None,
+        return_metadata: bool = False,
         **kwargs: Any,
     ) -> torch.Tensor | tuple[torch.Tensor, dict]:
         """Compute loss (callable interface).
 
         Args:
             coordinates: Atomic coordinates [N, 3]
+            structure_factor_calc: Optional structure factor calculator
+            return_metadata: Whether to return additional metadata
             **kwargs: Additional loss-specific arguments
 
         Returns:
             Loss value or tuple of (loss, metadata_dict)
         """
-        return self.compute(coordinates, **kwargs)
+        return self.compute(
+            coordinates,
+            structure_factor_calc=structure_factor_calc,
+            return_metadata=return_metadata,
+            **kwargs,
+        )
 
     def to(self, device: torch.device | str) -> "BaseLoss":
         """Move loss to device.
