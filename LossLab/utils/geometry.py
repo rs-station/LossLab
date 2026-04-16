@@ -3,24 +3,25 @@
 from __future__ import annotations
 
 import contextlib
+from typing import Any
 
 import numpy as np
 import torch
 
 
-def _as_numpy(x):
+def _as_numpy(x: Any) -> np.ndarray:
     if isinstance(x, torch.Tensor):
         return x.detach().cpu().numpy()
     return np.asarray(x)
 
 
 def weighted_kabsch(
-    P,
-    Q,
-    weights: np.ndarray | None = None,
+    P: Any,
+    Q: Any,
+    weights: np.ndarray | torch.Tensor | None = None,
     *,
     torch_backend: bool = False,
-):
+) -> tuple[Any, Any, Any]:
     """
     Weighted Kabsch alignment that computes the optimal rotation and translation
     aligning P -> Q according to given non-negative weights.
@@ -58,7 +59,7 @@ def weighted_kabsch(
         Y = Q - cQ
 
         H = (X * wn).T @ Y
-        ac = (
+        ac: Any = (
             torch.cuda.amp.autocast(enabled=False)
             if dev.type == "cuda"
             else contextlib.nullcontext()
@@ -80,26 +81,26 @@ def weighted_kabsch(
     Qn = _as_numpy(Q).astype(np.float64)
     n_points = Pn.shape[0]
     if weights is None:
-        w = np.ones((n_points,), dtype=np.float64)
+        wn_arr = np.ones((n_points,), dtype=np.float64)
     else:
-        w = np.asarray(weights, dtype=np.float64)
+        wn_arr = np.asarray(weights, dtype=np.float64)
 
-    wsum = max(w.sum(), 1e-8)
-    wn = (w / wsum).reshape(n_points, 1)
+    wsum_f = max(float(wn_arr.sum()), 1e-8)
+    wn_2d = (wn_arr / wsum_f).reshape(n_points, 1)
 
-    cP = (wn * Pn).sum(axis=0, keepdims=True)
-    cQ = (wn * Qn).sum(axis=0, keepdims=True)
+    cP = (wn_2d * Pn).sum(axis=0, keepdims=True)
+    cQ = (wn_2d * Qn).sum(axis=0, keepdims=True)
 
     X = Pn - cP
     Y = Qn - cQ
 
-    H = (X * wn).T @ Y
+    H = (X * wn_2d).T @ Y
     U, _, Vt = np.linalg.svd(H, full_matrices=False)
     detVU = np.linalg.det(U @ Vt)
-    D = np.eye(3)
+    Dn = np.eye(3)
     if detVU < 0:
-        D[2, 2] = -1.0
-    R = U @ D @ Vt
+        Dn[2, 2] = -1.0
+    R = U @ Dn @ Vt
 
     P_aligned = (X @ R) + cQ
     t = cQ.reshape(3) - (cP.reshape(3) @ R)
@@ -112,14 +113,14 @@ def kabsch_alignment(P, Q, *, torch_backend: bool = False):
 
 
 def iterative_kabsch_alignment(
-    P,
-    Q,
-    weights: np.ndarray | None = None,
+    P: Any,
+    Q: Any,
+    weights: np.ndarray | torch.Tensor | None = None,
     *,
     torch_backend: bool = False,
     max_iters: int = 5,
     tol: float = 1e-6,
-):
+) -> tuple[Any, Any, Any]:
     """Iteratively align P -> Q using weighted Kabsch and compose transforms."""
     if torch_backend:
         if not isinstance(P, torch.Tensor):
@@ -151,22 +152,22 @@ def iterative_kabsch_alignment(
 
     Pn = _as_numpy(P).astype(np.float64)
     Qn = _as_numpy(Q).astype(np.float64)
-    wn = None if weights is None else np.asarray(weights, dtype=np.float64)
+    wn_np = None if weights is None else np.asarray(weights, dtype=np.float64)
 
-    R_total = np.eye(3, dtype=np.float64)
-    t_total = np.zeros(3, dtype=np.float64)
-    P_current = Pn
+    R_total_np: np.ndarray = np.eye(3, dtype=np.float64)
+    t_total_np: np.ndarray = np.zeros(3, dtype=np.float64)
+    P_current_np = Pn
     for _ in range(max(1, max_iters)):
         R, t, P_aligned = weighted_kabsch(
-            P_current, Qn, weights=wn, torch_backend=False
+            P_current_np, Qn, weights=wn_np, torch_backend=False
         )
-        t_total = t_total @ R + t
-        R_total = R_total @ R
-        shift = np.sqrt(((P_aligned - P_current) ** 2).sum(axis=-1).mean())
-        P_current = P_aligned
+        t_total_np = t_total_np @ R + t
+        R_total_np = R_total_np @ R
+        shift = np.sqrt(((P_aligned - P_current_np) ** 2).sum(axis=-1).mean())
+        P_current_np = P_aligned
         if shift <= tol:
             break
-    return R_total, t_total, P_current
+    return R_total_np, t_total_np, P_current_np
 
 
 def align_pred_to_target(

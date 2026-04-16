@@ -108,7 +108,7 @@ class MetricsTracker:
                     value = value.item()
                 else:
                     value = value.detach().cpu().numpy()
-            if isinstance(value, (int, float, np.floating)):
+            if isinstance(value, int | float | np.floating):
                 return f"{value:.4f}"
             return str(value)
 
@@ -132,7 +132,7 @@ class MetricsTracker:
         # Convert to numpy arrays
         np_metrics = {key: np.array(values) for key, values in self.metrics.items()}
 
-        np.savez(output_path, **np_metrics)
+        np.savez(output_path, allow_pickle=True, **np_metrics)
         logger.info(f"Saved metrics to {output_path}")
 
     def get_best(

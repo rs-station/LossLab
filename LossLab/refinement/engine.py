@@ -147,6 +147,7 @@ class RefinementEngine:
             self.trajectory_writer = None
 
         # Initialize wandb logger if enabled
+        self.wandb_logger: WandbLogger | None = None
         if config.use_wandb:
             self.wandb_logger = WandbLogger(
                 project=config.wandb_project,
@@ -156,8 +157,6 @@ class RefinementEngine:
                 tags=config.wandb_tags,
                 notes=config.wandb_notes,
             )
-        else:
-            self.wandb_logger = None
 
         # Initialize trajectory writer after wandb logger for real-time streaming
         if config.save_trajectory_pdb and pdb_template is not None:
@@ -182,7 +181,7 @@ class RefinementEngine:
 
         # Global best tracking
         self.global_best_loss = float("inf")
-        self.global_best_state = {}
+        self.global_best_state: dict[str, Any] = {}
 
         logger.info("Initialized RefinementEngine")
         logger.info(f"Output directory: {self.output_dir}")

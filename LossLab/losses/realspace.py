@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import gemmi
 import numpy as np
@@ -135,7 +135,7 @@ class RealSpaceLoss(BaseLoss):
     ) -> torch.Tensor:
         center_np = (
             mask_center.detach().cpu().numpy()
-            if torch.is_tensor(mask_center)
+            if isinstance(mask_center, torch.Tensor)
             else np.asarray(mask_center, dtype=np.float32)
         )
         try:
@@ -165,7 +165,7 @@ class RealSpaceLoss(BaseLoss):
     ) -> np.ndarray:
         center_np = (
             mask_center.detach().cpu().numpy()
-            if torch.is_tensor(mask_center)
+            if isinstance(mask_center, torch.Tensor)
             else np.asarray(mask_center, dtype=np.float64)
         )
         try:
@@ -272,8 +272,9 @@ class RealSpaceLoss(BaseLoss):
     def compute(
         self,
         coordinates: torch.Tensor,
-        structure_factor_calc,
+        structure_factor_calc: Any = None,
         return_metadata: bool = False,
+        **kwargs: Any,
     ) -> torch.Tensor | tuple[torch.Tensor, dict]:
         """Compute loss value.
 
@@ -285,6 +286,7 @@ class RealSpaceLoss(BaseLoss):
         Returns:
             Loss value or tuple of (loss, metadata_dict)
         """
+        result: torch.Tensor | tuple[torch.Tensor, dict]
         if self.loss_type == "cc":
             result = self._compute_cc_loss(coordinates, structure_factor_calc)
         elif self.loss_type == "l2":
@@ -413,7 +415,7 @@ class RealSpaceLoss(BaseLoss):
         model_density = model_density / (model_density.sum() + eps)
 
         # Compute Sinkhorn divergence over multiple scales
-        total_loss = 0.0
+        total_loss = torch.tensor(0.0, device=self.device)
         for blur in blurs:
             sinkhorn = SamplesLoss(
                 loss="sinkhorn",

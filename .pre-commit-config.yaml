@@ -18,3 +18,13 @@ repos:
     # Run the formatter.
     - id: ruff-format
       types_or: [ python, pyi ]
+
+# mypy type checking (runs in the local project env so imports resolve)
+- repo: local
+  hooks:
+    - id: mypy
+      name: mypy
+      entry: bash -c 'mypy LossLab && mypy test'
+      language: system
+      types: [python]
+      pass_filenames: false

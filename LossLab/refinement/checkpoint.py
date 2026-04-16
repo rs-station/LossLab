@@ -37,7 +37,7 @@ class CheckpointManager:
         self.save_best_only = save_best_only
 
         self.best_loss = float("inf")
-        self.best_checkpoint_info = {}
+        self.best_checkpoint_info: dict[str, Any] = {}
 
     def save_checkpoint(
         self,

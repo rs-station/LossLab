@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -49,7 +50,7 @@ class TrajectoryWriter:
         self.wandb_logger = wandb_logger
 
         # Track writers per run_id
-        self.traj_writers = {}
+        self.traj_writers: dict[str, Any] = {}
         self.mdtraj_template = None
         self.topology = None
 
@@ -176,7 +177,7 @@ class TrajectoryWriter:
         coordinates: np.ndarray | torch.Tensor,
         run_id: str,
         iteration: int,
-        b_factors: np.ndarray | None = None,
+        b_factors: np.ndarray | torch.Tensor | None = None,
     ) -> None:
         """Save a single best structure as a PDB file.
 
@@ -186,6 +187,10 @@ class TrajectoryWriter:
             iteration: Iteration number when this best was found
             b_factors: Optional B-factors to write to PDB file
         """
+        if not MDTRAJ_AVAILABLE or self.topology is None:
+            logger.debug("mdtraj not available, skipping best PDB save")
+            return
+
         # Convert torch tensor to numpy if needed
         if isinstance(coordinates, torch.Tensor):
             coordinates = coordinates.detach().cpu().numpy()
