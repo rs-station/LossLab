@@ -8,6 +8,7 @@ from typing import Any
 import torch
 from loguru import logger
 from tqdm import tqdm
+import uuid
 
 from LossLab.losses.base import BaseLoss
 from LossLab.refinement.checkpoint import CheckpointManager
@@ -220,14 +221,14 @@ class RefinementEngine:
                 - best_iteration: Iteration of best result
                 - best_coordinates: Best coordinates
         """
-        from LossLab.refinement.utils import number_to_letter
+        
 
         logger.info("=" * 60)
         logger.info("Starting refinement")
         logger.info("=" * 60)
 
         for run_idx in range(self.config.num_runs):
-            run_id = number_to_letter(run_idx)
+            run_id = uuid.uuid4()
             logger.info(f"\n{'=' * 60}")
             logger.info(f"Run {run_id} ({run_idx + 1}/{self.config.num_runs})")
             logger.info(f"{'=' * 60}")
