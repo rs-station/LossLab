@@ -1,22 +1,19 @@
 """Utility modules for LossLab."""
 
 from losslab.utils.decorators import (
-    cached_property,
     gpu_memory_tracked,
     timed,
     validate_shapes,
 )
 from losslab.utils.geometry import compute_rmsd, kabsch_align
-from losslab.utils.map_utils import apply_mask, create_spherical_mask, normalize_map
+from losslab.utils.map_utils import create_spherical_mask, normalize_map
 
 __all__ = [
     "gpu_memory_tracked",
     "timed",
-    "cached_property",
     "validate_shapes",
     "kabsch_align",
     "compute_rmsd",
     "normalize_map",
-    "apply_mask",
     "create_spherical_mask",
 ]
