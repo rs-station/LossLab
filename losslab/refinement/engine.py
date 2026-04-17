@@ -398,7 +398,7 @@ class RefinementEngine:
         loss: torch.Tensor,
         refined_coords: torch.Tensor,
         iteration: int,
-        run_id: str,
+        run_id: uuid.UUID,
         run_best_loss: float,
         run_best_state: dict,
         save_pdb_callback: Callable | None,
@@ -437,7 +437,7 @@ class RefinementEngine:
             if self.trajectory_writer is not None:
                 self.trajectory_writer.save_best(
                     coordinates=refined_coords,
-                    run_id=run_id,
+                    run_id=str(run_id),
                     iteration=iteration,
                     b_factors=confidence,
                 )
@@ -454,7 +454,7 @@ class RefinementEngine:
             self.trajectory_writer.save_frame(
                 coordinates=refined_coords,
                 iteration=iteration,
-                run_id=run_id,
+                run_id=str(run_id),
                 b_factors=confidence,
                 loss=loss_value,
             )
@@ -471,7 +471,7 @@ class RefinementEngine:
 
     def _run_single_refinement(
         self,
-        run_id: str,
+        run_id: uuid.UUID,
         reference_coordinates: torch.Tensor,
         prediction_callback: Callable[[], torch.Tensor],
         optimizer: torch.optim.Optimizer | None,
@@ -492,7 +492,7 @@ class RefinementEngine:
         """
         # Initialize tracking
         metrics = MetricsTracker(
-            self.output_dir, run_id, log_to_file=self.config.log_metrics
+            self.output_dir, str(run_id), log_to_file=self.config.log_metrics
         )
         early_stopper = EarlyStopper(
             patience=self.config.early_stopping_patience,
