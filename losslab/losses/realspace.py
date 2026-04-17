@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, Literal
 
 import gemmi
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     from SFC_Torch import PDBParser
 
 from losslab.losses.base import BaseLoss
-from losslab.utils.decorators import cached_property, gpu_memory_tracked, timed
+from losslab.utils.decorators import gpu_memory_tracked, timed
 from losslab.utils.map_utils import (
     create_spherical_mask,
     create_spherical_mask_for_grid,
@@ -125,8 +126,7 @@ class RealSpaceLoss(BaseLoss):
             self.mask = torch.ones_like(self.target_map_grid, dtype=torch.bool)
             logger.info("Updated spherical mask disabled; using full map")
 
-        if hasattr(self, "_cached_normalized_target"):
-            delattr(self, "_cached_normalized_target")
+        self.__dict__.pop("normalized_target", None)
 
     def _build_mask(
         self,

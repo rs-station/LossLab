@@ -3,7 +3,6 @@
 import functools
 import time
 from collections.abc import Callable
-from typing import Any
 
 import torch
 from loguru import logger
@@ -96,85 +95,6 @@ def validate_shapes(*expected_shapes):
                                 f"expected {expected}, got {actual_shape}"
                             )
             return func(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
-
-
-def cached_property(func: Callable) -> property:
-    """Cache property result after first computation.
-
-    Args:
-        func: Property function to wrap
-
-    Returns:
-        Cached property
-    """
-    attr_name = f"_cached_{func.__name__}"
-
-    @functools.wraps(func)
-    def wrapper(self):
-        if not hasattr(self, attr_name):
-            setattr(self, attr_name, func(self))
-        return getattr(self, attr_name)
-
-    return property(wrapper)
-
-
-def handle_oom(fallback_value: Any = None):
-    """Handle CUDA out-of-memory errors gracefully.
-
-    Args:
-        fallback_value: Value to return on OOM error
-
-    Returns:
-        Decorated function that catches OOM
-    """
-
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except RuntimeError as e:
-                if "out of memory" in str(e):
-                    logger.error(f"OOM in {func.__name__}")
-                    if torch.cuda.is_available():
-                        mem_gb = torch.cuda.memory_allocated() / 1024**3
-                        logger.error(f"Allocated: {mem_gb:.2f}GB")
-                        torch.cuda.empty_cache()
-                    return fallback_value
-                raise
-
-        return wrapper
-
-    return decorator
-
-
-def batch_operation(batch_size: int = 100):
-    """Process operations in batches to reduce memory usage.
-
-    Args:
-        batch_size: Number of items to process per batch
-
-    Returns:
-        Decorated function that processes in batches
-    """
-
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(data: torch.Tensor, *args, **kwargs):
-            if len(data) <= batch_size:
-                return func(data, *args, **kwargs)
-
-            results = []
-            for i in range(0, len(data), batch_size):
-                batch = data[i : i + batch_size]
-                batch_result = func(batch, *args, **kwargs)
-                results.append(batch_result)
-
-            return torch.cat(results, dim=0)
 
         return wrapper
 
