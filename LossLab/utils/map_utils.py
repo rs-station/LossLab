@@ -34,40 +34,6 @@ def create_spherical_mask_for_grid(
     return np.array(temp_mask, copy=False).astype(bool)
 
 
-def denoise_and_mask_ccp4_map(
-    input_ccp4: gemmi.Ccp4Map,
-    ligand_coords: list[list[float]],
-    high_res_limit: float = 1.8,
-    mask_radius: float = 2.5,
-    tv_denoise: bool = False,
-) -> gemmi.Ccp4Map:
-    """Optionally denoise a CCP4 map and mask ligand regions (in-memory)."""
-    if tv_denoise:
-        from meteor import tv
-        from meteor.rsmap import Map
-
-        rsmap = Map.from_ccp4_map(input_ccp4, high_resolution_limit=high_res_limit)
-        denoised_map, _, _ = tv.tv_denoise_difference_map(rsmap, full_output=True)
-        output_ccp4 = denoised_map.to_ccp4_map(map_sampling=3)
-    else:
-        output_ccp4 = input_ccp4
-
-    grid = output_ccp4.grid
-
-    combined_mask = np.zeros(grid.shape, dtype=bool)
-    for coord in ligand_coords:
-        mask = create_spherical_mask_for_grid(
-            grid,
-            np.array(coord),
-            mask_radius,
-        )
-        combined_mask |= mask
-
-    grid_array = np.array(grid, copy=False)
-    grid_array[combined_mask] = 0
-    return output_ccp4
-
-
 def normalize_map(
     map_grid: torch.Tensor,
     mask: torch.Tensor | None = None,
