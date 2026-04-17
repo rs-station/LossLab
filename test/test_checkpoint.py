@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from LossLab.refinement.checkpoint import CheckpointManager
+from losslab.refinement.checkpoint import CheckpointManager
 
 
 def test_checkpoint_manager_initialization():

@@ -145,7 +145,7 @@ When `use_wandb=True`, LossLab automatically logs:
 ### Basic Usage
 
 ```python
-from LossLab import RefinementConfig, RefinementEngine, RealSpaceLoss
+from losslab import RefinementConfig, RefinementEngine, RealSpaceLoss
 
 config = RefinementConfig(
     num_iterations=100,
@@ -174,7 +174,7 @@ results = engine.run(
 ### Advanced: Manual Logging
 
 ```python
-from LossLab.refinement.wandb_logger import WandbLogger
+from losslab.refinement.wandb_logger import WandbLogger
 
 # Create custom logger
 wandb_logger = WandbLogger(

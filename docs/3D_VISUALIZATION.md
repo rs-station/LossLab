@@ -19,7 +19,7 @@ At the end of refinement, an animated 3D viewer is logged (HTML + 3Dmol.js) so y
 Simply enable W&B logging in your refinement config:
 
 ```python
-from LossLab import RefinementConfig, RefinementEngine
+from losslab import RefinementConfig, RefinementEngine
 
 config = RefinementConfig(
     # ... other parameters ...
