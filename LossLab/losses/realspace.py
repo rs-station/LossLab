@@ -373,65 +373,6 @@ class RealSpaceLoss(BaseLoss):
 
         return l2_loss
 
-    def _compute_sinkhorn_loss(
-        self,
-        coordinates: torch.Tensor,
-        sfc,
-        blurs: tuple[float, ...] = (3.0, 2.0, 1.0, 0.5),
-    ) -> torch.Tensor:
-        """Compute Sinkhorn (optimal transport) loss.
-
-        Args:
-            coordinates: Atomic coordinates
-            sfc: Structure factor calculator
-            blurs: Multiscale blur schedule in Angstroms
-
-        Returns:
-            Sinkhorn loss value
-        """
-        model_map = self.model_to_map(coordinates, sfc)
-
-        # Create coordinate grid for voxels
-        coords_3d = self._make_voxel_coordinates()
-
-        # Get nonnegative masked densities
-        if self.mask is not None:
-            active = self.mask.reshape(-1)
-        else:
-            active = torch.ones(
-                self.target_map_grid.numel(),
-                dtype=torch.bool,
-                device=self.device,
-            )
-
-        # Extract and normalize densities
-        target_density = torch.clamp(self.target_map_grid.reshape(-1)[active], min=0.0)
-        model_density = torch.clamp(model_map.reshape(-1)[active], min=0.0)
-        coords = coords_3d[active]
-
-        # Normalize to probability distributions
-        eps = 1e-12
-        target_density = target_density / (target_density.sum() + eps)
-        model_density = model_density / (model_density.sum() + eps)
-
-        # Compute Sinkhorn divergence over multiple scales
-        total_loss = torch.tensor(0.0, device=self.device)
-        for blur in blurs:
-            sinkhorn = SamplesLoss(
-                loss="sinkhorn",
-                p=2,
-                blur=blur,
-                backend="multiscale",
-                debias=True,
-            )
-            loss_val = sinkhorn(
-                target_density.unsqueeze(-1) * coords,
-                model_density.unsqueeze(-1) * coords,
-            )
-            total_loss += loss_val
-
-        return total_loss / len(blurs)
-
     def _compute_rscc_map(
         self,
         map1: torch.Tensor,
