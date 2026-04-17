@@ -6,7 +6,7 @@ import SFC_Torch as sfc
 import torch
 from SFC_Torch import PDBParser
 
-from LossLab import RealSpaceLoss, RefinementConfig, RefinementEngine
+from losslab import RealSpaceLoss, RefinementConfig, RefinementEngine
 
 
 def main():

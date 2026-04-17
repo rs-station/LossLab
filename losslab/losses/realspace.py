@@ -14,9 +14,9 @@ from loguru import logger
 if TYPE_CHECKING:
     from SFC_Torch import PDBParser
 
-from LossLab.losses.base import BaseLoss
-from LossLab.utils.decorators import cached_property, gpu_memory_tracked, timed
-from LossLab.utils.map_utils import (
+from losslab.losses.base import BaseLoss
+from losslab.utils.decorators import cached_property, gpu_memory_tracked, timed
+from losslab.utils.map_utils import (
     create_spherical_mask,
     create_spherical_mask_for_grid,
     gaussian_smooth_3d,

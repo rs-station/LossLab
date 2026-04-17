@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from LossLab.utils.geometry import (
+from losslab.utils.geometry import (
     apply_rigid_body_transform,
     center_coordinates,
     compute_rmsd,

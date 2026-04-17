@@ -24,7 +24,7 @@ repos:
   hooks:
     - id: mypy
       name: mypy
-      entry: bash -c 'mypy LossLab && mypy test'
+      entry: bash -c 'mypy losslab && mypy test'
       language: system
       types: [python]
       pass_filenames: false

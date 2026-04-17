@@ -9,14 +9,14 @@ import torch
 from loguru import logger
 from tqdm import tqdm
 
-from LossLab.losses.base import BaseLoss
-from LossLab.refinement.checkpoint import CheckpointManager
-from LossLab.refinement.config import RefinementConfig
-from LossLab.refinement.metrics import MetricsTracker
-from LossLab.refinement.trajectory import TrajectoryWriter
-from LossLab.refinement.wandb_logger import WandbLogger
-from LossLab.utils.decorators import gpu_memory_tracked, timed
-from LossLab.utils.geometry import kabsch_align
+from losslab.losses.base import BaseLoss
+from losslab.refinement.checkpoint import CheckpointManager
+from losslab.refinement.config import RefinementConfig
+from losslab.refinement.metrics import MetricsTracker
+from losslab.refinement.trajectory import TrajectoryWriter
+from losslab.refinement.wandb_logger import WandbLogger
+from losslab.utils.decorators import gpu_memory_tracked, timed
+from losslab.utils.geometry import kabsch_align
 
 
 class EarlyStopper:
@@ -220,7 +220,7 @@ class RefinementEngine:
                 - best_iteration: Iteration of best result
                 - best_coordinates: Best coordinates
         """
-        from LossLab.refinement.utils import number_to_letter
+        from losslab.refinement.utils import number_to_letter
 
         logger.info("=" * 60)
         logger.info("Starting refinement")

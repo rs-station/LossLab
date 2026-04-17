@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from LossLab.losses.base import BaseLoss
+from losslab.losses.base import BaseLoss
 
 
 class MSECoordinatesLoss(BaseLoss):
@@ -111,7 +111,7 @@ class MSECoordinatesLoss(BaseLoss):
                 "coordinates and reference_coordinates must have the same shape"
             )
         if self.align:
-            from LossLab.utils.geometry import kabsch_align
+            from losslab.utils.geometry import kabsch_align
 
             aligned_coords = kabsch_align(
                 coordinates,
