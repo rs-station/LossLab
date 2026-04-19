@@ -2,6 +2,5 @@
 
 from losslab.losses.base import BaseLoss
 from losslab.losses.mse import MSECoordinatesLoss
-from losslab.losses.realspace import RealSpaceLoss
 
-__all__ = ["RealSpaceLoss", "MSECoordinatesLoss", "BaseLoss"]
+__all__ = ["MSECoordinatesLoss", "BaseLoss"]

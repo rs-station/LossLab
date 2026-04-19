@@ -145,7 +145,7 @@ When `use_wandb=True`, LossLab automatically logs:
 ### Basic Usage
 
 ```python
-from losslab import RefinementConfig, RefinementEngine, RealSpaceLoss
+from losslab import RefinementConfig, RefinementEngine
 
 config = RefinementConfig(
     num_iterations=100,
@@ -199,5 +199,3 @@ wandb_logger.log_coordinates(coords_tensor, name="best_coords")
 # Finish
 wandb_logger.finish()
 ```
-
-
