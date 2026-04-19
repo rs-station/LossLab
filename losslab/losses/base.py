@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Protocol
 
 import torch
 from SFC_Torch.Fmodel import SFcalculator
 
 from losslab.losses.settings import DEFAULT_TORCH_DEVICE
+
+
+class ValidLoss(Protocol):
+    def compute(self, coordinates: torch.Tensor) -> torch.Tensor: ...
+
+    def __call__(self, coordinates: torch.Tensor) -> torch.Tensor:
+        return self.compute(coordinates)
 
 
 class BaseLoss(ABC):
@@ -22,15 +30,9 @@ class BaseLoss(ABC):
         self.device = torch.device(device)
 
     @abstractmethod
-    def compute(
-        self,
-        coordinates: torch.Tensor,
-    ) -> torch.Tensor: ...
+    def compute(self, coordinates: torch.Tensor) -> torch.Tensor: ...
 
-    def __call__(
-        self,
-        coordinates: torch.Tensor,
-    ) -> torch.Tensor:
+    def __call__(self, coordinates: torch.Tensor) -> torch.Tensor:
         return self.compute(coordinates)
 
     def to(self, device: torch.device | str) -> BaseLoss:
