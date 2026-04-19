@@ -1,71 +1,48 @@
 """Base loss class for coordinate refinement."""
 
 from abc import ABC, abstractmethod
-from typing import Any
+from SFC_Torch.Fmodel import SFcalculator
 
 import torch
+
+from losslab.losses.settings import DEFAULT_TORCH_DEVICE
 
 
 class BaseLoss(ABC):
     """Abstract base class for refinement loss functions."""
 
-    def __init__(self, device: torch.device | str = "cuda:0"):
+    def __init__(self, *, device: torch.device = DEFAULT_TORCH_DEVICE):
         """Initialize base loss.
 
         Args:
             device: PyTorch device for computations
         """
-        if isinstance(device, str):
-            device = torch.device(device)
-        self.device = device
+        self.device = torch.device(device)
 
     @abstractmethod
     def compute(
         self,
         coordinates: torch.Tensor,
-        structure_factor_calc: Any = None,
-        return_metadata: bool = False,
-        **kwargs: Any,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict]:
+    ) -> torch.Tensor:
         """Compute loss value.
 
         Args:
             coordinates: Atomic coordinates [N, 3]
-            structure_factor_calc: Optional structure factor calculator
-            return_metadata: Whether to return additional metadata
-            **kwargs: Additional loss-specific arguments
 
         Returns:
-            Loss value or tuple of (loss, metadata_dict)
+            Loss value 
         """
-        pass
+        ...
 
     def __call__(
         self,
         coordinates: torch.Tensor,
-        structure_factor_calc: Any = None,
-        return_metadata: bool = False,
-        **kwargs: Any,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict]:
-        """Compute loss (callable interface).
-
-        Args:
-            coordinates: Atomic coordinates [N, 3]
-            structure_factor_calc: Optional structure factor calculator
-            return_metadata: Whether to return additional metadata
-            **kwargs: Additional loss-specific arguments
-
-        Returns:
-            Loss value or tuple of (loss, metadata_dict)
-        """
+    ) -> torch.Tensor:
         return self.compute(
             coordinates,
-            structure_factor_calc=structure_factor_calc,
-            return_metadata=return_metadata,
-            **kwargs,
         )
 
-    def to(self, device: torch.device | str) -> "BaseLoss":
+    def to(self, device: torch.device) -> "BaseLoss":
         """Move loss to device.
 
         Args:
@@ -74,7 +51,17 @@ class BaseLoss(ABC):
         Returns:
             Self for chaining
         """
-        if isinstance(device, str):
-            device = torch.device(device)
-        self.device = device
+        self.device = torch.device(device)
         return self
+
+
+class SFCLoss(BaseLoss):
+
+    def __init__(self, *, structure_factor_calcator: SFcalculator, device: torch.device = DEFAULT_TORCH_DEVICE):
+        """Initialize base loss.
+
+        Args:
+            device: PyTorch device for computations
+        """
+        self.structure_factor_calcator = structure_factor_calcator
+        super().__init__(device=device)
