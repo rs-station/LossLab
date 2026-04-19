@@ -61,7 +61,7 @@ class RealSpaceLoss(BaseLoss):
             mask_center: Center of spherical mask in orthogonal coordinates
             mask_radius: Radius of spherical mask in Angstroms
         """
-        super().__init__(device)
+        super().__init__(device=device)
 
         self.pdb_obj = pdb_obj
         self.loss_type = loss_type

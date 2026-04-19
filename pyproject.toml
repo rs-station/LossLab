@@ -46,7 +46,7 @@ wandb = [
 
 CI = [
     "ruff",
-    "pre-commit",
+    "pre-commit>=4.0.0",
     "mypy>=1.20.1",
 ]
 

@@ -23,7 +23,7 @@ class MSECoordinatesLoss(BaseLoss):
         moving_pdb=None,
         selection: str = "BB",
     ) -> None:
-        super().__init__(device)
+        super().__init__(device=device)
         if reduction not in {"mean", "sum"}:
             raise ValueError("reduction must be 'mean' or 'sum'")
         self.reduction = reduction

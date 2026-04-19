@@ -1,9 +1,12 @@
 """Base loss class for coordinate refinement."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from SFC_Torch.Fmodel import SFcalculator
+from typing import Any
 
 import torch
+from SFC_Torch.Fmodel import SFcalculator
 
 from losslab.losses.settings import DEFAULT_TORCH_DEVICE
 
@@ -11,7 +14,7 @@ from losslab.losses.settings import DEFAULT_TORCH_DEVICE
 class BaseLoss(ABC):
     """Abstract base class for refinement loss functions."""
 
-    def __init__(self, *, device: torch.device = DEFAULT_TORCH_DEVICE):
+    def __init__(self, *, device: torch.device | str = DEFAULT_TORCH_DEVICE):
         """Initialize base loss.
 
         Args:
@@ -23,26 +26,31 @@ class BaseLoss(ABC):
     def compute(
         self,
         coordinates: torch.Tensor,
-    ) -> torch.Tensor:
+        structure_factor_calc: Any = None,
+        return_metadata: bool = False,
+        **kwargs: Any,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, Any]]:
         """Compute loss value.
 
         Args:
             coordinates: Atomic coordinates [N, 3]
+            structure_factor_calc: Structure factor calculator (optional)
+            return_metadata: Whether to return additional metadata
 
         Returns:
-            Loss value 
+            Loss value or tuple of (loss, metadata_dict)
         """
         ...
 
     def __call__(
         self,
         coordinates: torch.Tensor,
-    ) -> torch.Tensor:
-        return self.compute(
-            coordinates,
-        )
+        *args: Any,
+        **kwargs: Any,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, Any]]:
+        return self.compute(coordinates, *args, **kwargs)
 
-    def to(self, device: torch.device) -> "BaseLoss":
+    def to(self, device: torch.device | str) -> BaseLoss:
         """Move loss to device.
 
         Args:
@@ -56,8 +64,12 @@ class BaseLoss(ABC):
 
 
 class SFCLoss(BaseLoss):
-
-    def __init__(self, *, structure_factor_calcator: SFcalculator, device: torch.device = DEFAULT_TORCH_DEVICE):
+    def __init__(
+        self,
+        *,
+        structure_factor_calcator: SFcalculator,
+        device: torch.device = DEFAULT_TORCH_DEVICE,
+    ):
         """Initialize base loss.
 
         Args:

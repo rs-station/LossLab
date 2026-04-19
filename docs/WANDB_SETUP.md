@@ -199,5 +199,3 @@ wandb_logger.log_coordinates(coords_tensor, name="best_coords")
 # Finish
 wandb_logger.finish()
 ```
-
-
