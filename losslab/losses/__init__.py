@@ -1,7 +1,5 @@
 """Loss functions module for coordinate refinement."""
 
-from losslab.losses.base import BaseLoss
-from losslab.losses.mse import MSECoordinatesLoss, MSEPdbLoss
-from losslab.losses.realspace import RealSpaceLoss
+from losslab.losses.mse import MSECoordinatesLoss
 
-__all__ = ["RealSpaceLoss", "MSECoordinatesLoss", "MSEPdbLoss", "BaseLoss"]
+__all__ = ["MSECoordinatesLoss"]
