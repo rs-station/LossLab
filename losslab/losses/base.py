@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 import torch
 from SFC_Torch.Fmodel import SFcalculator
@@ -26,29 +25,13 @@ class BaseLoss(ABC):
     def compute(
         self,
         coordinates: torch.Tensor,
-        structure_factor_calc: Any = None,
-        return_metadata: bool = False,
-        **kwargs: Any,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, Any]]:
-        """Compute loss value.
-
-        Args:
-            coordinates: Atomic coordinates [N, 3]
-            structure_factor_calc: Structure factor calculator (optional)
-            return_metadata: Whether to return additional metadata
-
-        Returns:
-            Loss value or tuple of (loss, metadata_dict)
-        """
-        ...
+    ) -> torch.Tensor: ...
 
     def __call__(
         self,
         coordinates: torch.Tensor,
-        *args: Any,
-        **kwargs: Any,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, Any]]:
-        return self.compute(coordinates, *args, **kwargs)
+    ) -> torch.Tensor:
+        return self.compute(coordinates)
 
     def to(self, device: torch.device | str) -> BaseLoss:
         """Move loss to device.
@@ -67,7 +50,7 @@ class SFCLoss(BaseLoss):
     def __init__(
         self,
         *,
-        structure_factor_calcator: SFcalculator,
+        structure_factor_calculator: SFcalculator,
         device: torch.device = DEFAULT_TORCH_DEVICE,
     ):
         """Initialize base loss.
@@ -75,5 +58,5 @@ class SFCLoss(BaseLoss):
         Args:
             device: PyTorch device for computations
         """
-        self.structure_factor_calcator = structure_factor_calcator
+        self.structure_factor_calculator = structure_factor_calculator
         super().__init__(device=device)
