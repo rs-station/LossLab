@@ -359,16 +359,8 @@ class RefinementEngine:
         Returns:
             Tuple of (loss, metadata_dict)
         """
-        loss_result = self.loss_fn.compute(coordinates, self.sfc, return_metadata=True)
-
-        # Unpack loss and metadata
-        loss, metadata = (
-            loss_result if isinstance(loss_result, tuple) else (loss_result, {})
-        )
-
-        # Add confidence to metadata
-        metadata["mean_confidence"] = confidence.mean().item()
-
+        loss = self.loss_fn.compute(coordinates)
+        metadata: dict[str, float] = {"mean_confidence": confidence.mean().item()}
         return loss, metadata
 
     def _optimize(

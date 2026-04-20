@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-
 from SFC_Torch.io import PDBParser
 
-from losslab.losses.settings import DEFAULT_TORCH_DEVICE
 from losslab.losses.base import BaseLoss
+from losslab.losses.settings import DEFAULT_TORCH_DEVICE
 from losslab.utils.geometry import (
     AlignmentSelection,
     compute_common_indices,
@@ -65,10 +64,10 @@ class MSEPdbLoss(MSECoordinatesLoss):
             device=device,
             align=align,
         )
-        self.alignment_selection = AlignmentSelection(alignment_selection)
+        self.alignment_selection = alignment_selection
         self.reference_cra = list(reference_pdb.cra_name)
         self._full_reference_coordinates = self.reference_coordinates
-        
+
         self.index_moving: np.ndarray
         self.index_reference: np.ndarray
 
