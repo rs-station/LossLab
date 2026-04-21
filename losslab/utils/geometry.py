@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import contextlib
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
 import torch
+
+
+class AlignmentSelection(StrEnum):
+    """Atom subset used when aligning two structures."""
+
+    ALL = "ALL"
+    CA = "CA"
+    BB = "BB"
 
 
 def _as_numpy(x: Any) -> np.ndarray:
@@ -315,6 +324,49 @@ def center_coordinates(coordinates: torch.Tensor) -> tuple[torch.Tensor, torch.T
     return centered, centroid
 
 
+def compute_common_indices(
+    moving_cra: list[str],
+    reference_cra: list[str],
+    alignment_selection: AlignmentSelection,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Find indices of atoms shared between moving and reference, filtered by selection.
+
+    Args:
+        moving_cra: Atom names from the moving structure (chain-residue-atom strings).
+        reference_cra: Atom names from the reference structure.
+        alignment_selection: Which atom subset to keep (ALL, CA, or BB).
+
+    Returns:
+        Tuple of (index_moving, index_reference) into the respective atom lists.
+    """
+    alignment_selection = AlignmentSelection(alignment_selection)
+
+    def _keep(name: str) -> bool:
+        if alignment_selection is AlignmentSelection.ALL:
+            return True
+        if alignment_selection is AlignmentSelection.CA:
+            return name.endswith("-CA")
+        return name.endswith("-N") or name.endswith("-CA") or name.endswith("-C")
+
+    reference_lookup = {
+        name: idx for idx, name in enumerate(reference_cra) if _keep(name)
+    }
+    index_moving: list[int] = []
+    index_reference: list[int] = []
+    for idx, name in enumerate(moving_cra):
+        if not _keep(name):
+            continue
+        ref_idx = reference_lookup.get(name)
+        if ref_idx is not None:
+            index_moving.append(idx)
+            index_reference.append(ref_idx)
+
+    if not index_moving:
+        raise ValueError("No overlapping atoms found between moving and reference")
+
+    return np.array(index_moving), np.array(index_reference)
+
+
 __all__ = [
     "weighted_kabsch",
     "kabsch_alignment",
@@ -324,4 +376,6 @@ __all__ = [
     "compute_rmsd",
     "apply_rigid_body_transform",
     "center_coordinates",
+    "compute_common_indices",
+    "AlignmentSelection",
 ]
