@@ -20,8 +20,6 @@ References:
 from __future__ import annotations
 
 import math
-import os
-import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,113 +28,23 @@ if TYPE_CHECKING:
 # s_to_q_factor = 1/(16π²), matching C++: 1/(4*4*pi*pi)
 _S_TO_Q: float = 1.0 / (16.0 * math.pi ** 2)
 
-_HEADER_RELPATH = os.path.join("include", "core", "form_factor", "FormFactorTable.h")
 
+def _build_coeffs_from_pyausaxs() -> dict[str, dict]:
+    """Try importing coefficients from pyAUSAXS"""
+    try:
+        import pyausaxs as ausaxs
+    except ImportError:
+        raise FileNotFoundError("pyAUSAXS not found")
 
-def _find_header() -> str:
-    """Return the path to FormFactorTable.h or raise FileNotFoundError."""
-    # 1. Direct override
-    direct = os.environ.get("AUSAXS_HEADER")
-    if direct and os.path.isfile(direct):
-        return direct
-
-    # 2. Repo root override
-    root = os.environ.get("AUSAXS_ROOT")
-    if root:
-        candidate = os.path.join(root, _HEADER_RELPATH)
-        if os.path.isfile(candidate):
-            return candidate
-
-    raise FileNotFoundError(
-        "FormFactorTable.h not found.\n"
-        "Set one of these environment variables:\n"
-        "  AUSAXS_ROOT=/path/to/AUSAXS   (repo root)\n"
-        "  AUSAXS_HEADER=/path/to/FormFactorTable.h   (direct)"
-    )
-
-
-def _parse_array(text: str) -> list[float]:
-    """Extract floats from a C++ brace-initialiser, e.g. {1.0, -2.3, 0}."""
-    inner = re.search(r"\{([^}]*)\}", text)
-    if not inner:
-        return []
-    return [float(v.strip()) for v in inner.group(1).split(",") if v.strip()]
-
-
-def _extract_namespace_body(src: str, start: int) -> tuple[str, int]:
-    """Return the body inside the braces starting at `start` and the end index."""
-    depth = 0
-    i = start
-    body_start = None
-    while i < len(src):
-        if src[i] == "{":
-            depth += 1
-            if body_start is None:
-                body_start = i + 1
-        elif src[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return src[body_start:i], i + 1
-        i += 1
-    return "", len(src)
-
-
-def _load_form_factor_coeffs(header_path: str) -> dict[str, dict]:
-    """Parse FormFactorTable.h and return a dict keyed by atom-type name.
-
-    Each entry: {"a": [5 floats], "b": [5 floats in q-space], "c": float}
-    """
-    with open(header_path) as fh:
-        src = fh.read()
-
-    # Strip C++ comments
-    src = re.sub(r"//[^\n]*", "", src)
-    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
-
-    coeffs: dict[str, dict] = {}
-
-    # Find all "namespace <Name>" occurrences, extract body, look for a/b/c
-    for m in re.finditer(r"\bnamespace\s+(\w+)\s*\{", src):
-        name = m.group(1)
-        body, _ = _extract_namespace_body(src, m.end() - 1)
-
-        a_m = re.search(r"\ba\s*=\s*(\{[^}]*\})", body)
-        b_m = re.search(r"\bb\s*=\s*s_to_q\s*\((\{[^}]*\})\)", body)
-        c_m = re.search(r"\bc\s*=\s*([-\d.e+]+)", body)
-
-        if not (a_m and b_m and c_m):
-            continue
-
-        a = _parse_array(a_m.group(1))
-        b_s = _parse_array(b_m.group(1))
-        b_q = [v * _S_TO_Q for v in b_s]
-        c = float(c_m.group(1))
-
-        coeffs[name] = {"a": a, "b": b_q, "c": c}
-
+    coeffs = {}
+    for name in ausaxs.form_factor.valid_types():
+        data = ausaxs.form_factor.get_five_gaussian_coefficients(name)
+        coeffs[str(name)] = {
+            "a": list(data[0]),
+            "b": list(data[1]),
+            "c": data[2],
+        }
     return coeffs
-
-
-def _build_coeffs_from_header() -> dict[str, dict]:
-    """Load from header and add pyAUSAXS enum aliases."""
-    path = _find_header()
-    raw = _load_form_factor_coeffs(path)
-
-    # FormFactor.h enum mappings: CH→CH_sp3, CH2→CH2_sp3, CH3→CH3_sp3,
-    #                             NH3→NH3_plus, OH→OH_alc, OTH→other
-    aliases = {
-        "CH":  "CH_sp3",
-        "CH2": "CH2_sp3",
-        "CH3": "CH3_sp3",
-        "NH3": "NH3_plus",
-        "OH":  "OH_alc",
-        "OTH": "other",
-    }
-    for short, full in aliases.items():
-        if full in raw:
-            raw[short] = raw[full]
-
-    return raw
 
 
 # Hardcoded fallback coefficients (s-space b values from Waasmaier & Kirfel /
@@ -187,8 +95,9 @@ def _build_fallback_coeffs() -> dict[str, dict]:
 
 def _build_coeffs() -> dict[str, dict]:
     """Try parsing AUSAXS header; fall back to hardcoded tables."""
+
     try:
-        return _build_coeffs_from_header()
+        return _build_coeffs_from_pyausaxs()
     except FileNotFoundError:
         return _build_fallback_coeffs()
 
